@@ -13,7 +13,6 @@ Guarantees:
 from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
 from dataclasses import dataclass
@@ -77,25 +76,15 @@ class OnnxLamaEngine:
 
     name = "LaMa (AI)"
 
-    #: Output scales accepted by the self-test (0..1 exports, 0..255 exports).
-    OUTPUT_SCALES = (1.0, 255.0)
-    #: Detected level must be within this factor of a known scale.
-    SCALE_TOLERANCE = 2.0
-
     def __init__(
         self,
         session,
         input_size: int = MODEL_INPUT_SIZE,
-        output_scale: float | None = None,
     ) -> None:
         self._session = session
         self.input_size = int(input_size)
         self._out_name = MODEL_OUTPUT
-        self.output_scale = (
-            float(output_scale)
-            if output_scale is not None
-            else self._detect_output_scale()
-        )
+        self.output_scale = self._detect_output_scale()
 
     # ------------------------------------------------------------------ run
     def _run_raw(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -136,21 +125,21 @@ class OnnxLamaEngine:
                 "ONNX self-test produced non-finite output — provider rejected."
             )
 
-        context = float(raw[mask < 0.5].mean())
-        if not np.isfinite(context) or context <= 0.0:
-            raise InpaintError(
-                f"ONNX self-test returned an absurd context level ({context})."
-            )
+        context = float(raw[mask < 0.5].mean(dtype=np.float64))
         ratio = context / PROBE_LEVEL
-        scale = min(self.OUTPUT_SCALES, key=lambda c: abs(math.log(ratio / c)))
-        lo, hi = scale / self.SCALE_TOLERANCE, scale * self.SCALE_TOLERANCE
-        if not lo <= ratio <= hi:
+        if not 0.2 < ratio < 400:
             raise InpaintError(
-                "ONNX self-test context level is absurd "
-                f"(context {context:.4g} for a {PROBE_LEVEL} input; "
-                f"expected ~1x or ~255x) — provider rejected."
+                f"ONNX self-test context ratio is implausible ({ratio:.4g}) "
+                "— provider rejected."
             )
-        log.info("LaMa ONNX output scale detected: %.0fx", scale)
+        scale = 255.0 if ratio > 10 else 1.0
+        hole_median = float(np.median(raw[mask > 0.5]))
+        if not 0.02 * scale < hole_median < 0.98 * scale:
+            raise InpaintError(
+                f"ONNX self-test hole median is implausible ({hole_median:.4g} "
+                f"at scale {scale:g}) — provider rejected."
+            )
+        log.info("LaMa self-test OK: output scale = %g", scale)
         return scale
 
     def fill(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:

@@ -68,7 +68,7 @@ UI never blocks and every job is cancellable.
 | `OnnxLamaEngine` | model present | Carve/LaMa-ONNX `lama_fp32.onnx`; inputs `image`/`mask`, fixed 512², output `output`; CUDA EP preferred, CPU fallback |
 | `ClassicalEngine` | model missing / download pending | `cv2.inpaint` (Telea) — lower quality, keeps app usable and tests deterministic |
 
-`runtime.create_session()` prefers `CUDAExecutionProvider`, falls back to CPU;
+`runtime.create_onnx_session()` prefers `CUDAExecutionProvider`, falls back to CPU;
 `build_default_engine()` tries each provider in turn (CUDA, then CPU) and ends
 on `ClassicalEngine`.
 
@@ -79,8 +79,12 @@ clipping a 0..255 output to [0, 1] turns every fill solid white. On
 construction `OnnxLamaEngine` therefore runs a synthetic self-test (gray 512²
 tile, centred hole) and derives the scale from the untouched context level,
 normalising the raw output in `fill()`. A session whose self-test output is
-non-finite or matches no plausible scale (1x/255x) is rejected, so a broken
-provider degrades instead of painting white.
+non-finite or wrongly shaped is rejected. The context mean divided by 0.5
+must lie strictly between 0.2 and 400; ratios above 10 select scale 255,
+otherwise scale 1. The hole median must lie strictly between 0.02 and 0.98
+times that scale. This rejects broken fills even when the context is intact.
+Successful probes log `LaMa self-test OK: output scale = %g`; failed probes
+try the next provider instead of painting white.
 
 `runtime.probe_vram()` (pynvml if available) feeds the status bar; the
 fixed 512² window keeps inference memory tiny regardless of image size.

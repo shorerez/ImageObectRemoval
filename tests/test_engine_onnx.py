@@ -13,10 +13,12 @@ from object_remover.errors import InpaintError
 from object_remover.inpaint import InpaintService, OnnxLamaEngine, build_default_engine
 
 
-def _make_tiny_lama(path: Path, scale: float = 1.0) -> Path:
+def _make_tiny_lama(
+    path: Path, scale: float = 1.0, hole_level: float = 0.5
+) -> Path:
     """A 0.5-kB ONNX model with LaMa's contract, output scaled by ``scale``.
 
-    output = (image * (1 - mask) + 0.5 * mask) * scale
+    output = (image * (1 - mask) + hole_level * mask) * scale
 
     ``scale=1`` mimics the PyTorch 0..1 convention, ``scale=255`` the
     Carve/LaMa-ONNX export (its demo casts the raw output straight to uint8).
@@ -36,7 +38,7 @@ def _make_tiny_lama(path: Path, scale: float = 1.0) -> Path:
     ]
     consts = [
         helper.make_tensor("one", TensorProto.FLOAT, [1], [1.0]),
-        helper.make_tensor("half", TensorProto.FLOAT, [1], [0.5]),
+        helper.make_tensor("half", TensorProto.FLOAT, [1], [hole_level]),
         helper.make_tensor("scale", TensorProto.FLOAT, [1], [float(scale)]),
     ]
     graph = helper.make_graph(nodes, "tiny_lama", [img, mask], [out], consts)
@@ -88,11 +90,13 @@ def test_engine_fill_contract(tiny_lama):
     assert out[10, 10, 0] == pytest.approx(0.0)    # context kept
 
 
-def test_engine_detects_255_output_scale(tiny_lama_255):
+def test_engine_detects_255_output_scale(tiny_lama_255, caplog):
     """A 0..255 model must be normalised, not clipped to white."""
     from object_remover.runtime import create_onnx_session
 
-    engine = OnnxLamaEngine(create_onnx_session(tiny_lama_255))
+    with caplog.at_level("INFO", logger="object_remover.inpaint"):
+        engine = OnnxLamaEngine(create_onnx_session(tiny_lama_255))
+    assert "LaMa self-test OK: output scale = 255" in caplog.text
     assert engine.output_scale == pytest.approx(255.0)
 
     tile = np.zeros((512, 512, 3), np.float32)
@@ -160,3 +164,96 @@ def test_service_with_onnx_engine(tiny_lama):
     # protected + unselected untouched
     np.testing.assert_array_equal(out[280:290, 280:290], pixels[280:290, 280:290])
     np.testing.assert_array_equal(out[:50], pixels[:50])
+
+
+@pytest.mark.parametrize("scale", [1.0, 255.0])
+@pytest.mark.parametrize("hole_level", [0.0, 1.0])
+def test_saturated_hole_with_valid_context_falls_back(tmp_path, scale, hole_level):
+    """Good context alone cannot validate a model that paints black/white holes."""
+    from object_remover.runtime import create_onnx_session
+
+    path = _make_tiny_lama(tmp_path / "bad_hole.onnx", scale, hole_level)
+    with pytest.raises(InpaintError, match="hole median"):
+        OnnxLamaEngine(create_onnx_session(path))
+    assert build_default_engine(path).name == "Classical (fallback)"
+
+
+@pytest.mark.parametrize(
+    "ratio,hole_level,expected_scale",
+    [(0.21, 0.5, 1.0), (10.0, 0.5, 1.0), (10.01, 127.5, 255.0),
+     (399.0, 127.5, 255.0)],
+)
+def test_self_test_scale_thresholds(monkeypatch, ratio, hole_level, expected_scale):
+    def run_raw(self, tile, mask):
+        assert tile.shape == (512, 512, 3)
+        assert np.all(tile == 0.5)
+        assert mask[256, 256] == 1.0 and mask[0, 0] == 0.0
+        raw = np.full(tile.shape, ratio * 0.5, dtype=np.float64)
+        raw[mask > 0.5] = hole_level
+        return raw
+
+    monkeypatch.setattr(OnnxLamaEngine, "_run_raw", run_raw)
+    assert OnnxLamaEngine(object()).output_scale == expected_scale
+
+
+@pytest.mark.parametrize(
+    "ratio,hole_level",
+    [(0.2, 0.5), (400.0, 127.5), (0.0, 0.5), (-1.0, 0.5),
+     (1.0, 0.02), (1.0, 0.98), (255.0, 0.02 * 255), (255.0, 0.98 * 255)],
+)
+def test_self_test_rejects_boundary_values(monkeypatch, ratio, hole_level):
+    def run_raw(self, tile, mask):
+        raw = np.full(tile.shape, ratio * 0.5, dtype=np.float64)
+        raw[mask > 0.5] = hole_level
+        return raw
+
+    monkeypatch.setattr(OnnxLamaEngine, "_run_raw", run_raw)
+    with pytest.raises(InpaintError):
+        OnnxLamaEngine(object())
+
+
+@pytest.mark.parametrize("cuda_failure", [None, "session", "self-test"])
+def test_provider_preference_and_cpu_retry(monkeypatch, tiny_lama, cuda_failure):
+    from object_remover import runtime
+
+    cpu_session = runtime.create_onnx_session(tiny_lama, providers=["CPUExecutionProvider"])
+    calls = []
+
+    class BrokenSession:
+        def run(self, *args):
+            raise RuntimeError("CUDA inference failed")
+
+    def create_session(path, providers):
+        assert path == tiny_lama
+        calls.append(providers)
+        if providers == ["CUDAExecutionProvider"]:
+            if cuda_failure == "session":
+                raise RuntimeError("CUDA unavailable")
+            if cuda_failure == "self-test":
+                return BrokenSession()
+        return cpu_session
+
+    monkeypatch.setattr(runtime, "create_onnx_session", create_session)
+    assert isinstance(build_default_engine(tiny_lama), OnnxLamaEngine)
+    expected = [["CUDAExecutionProvider"]]
+    if cuda_failure:
+        expected.append(["CPUExecutionProvider"])
+    assert calls == expected
+
+
+def test_all_providers_fail_self_test_before_classical_fallback(monkeypatch, tmp_path):
+    from object_remover import runtime
+
+    calls = []
+
+    class BrokenSession:
+        def run(self, *args):
+            raise RuntimeError("Inference failed")
+
+    def create_session(path, providers):
+        calls.append(providers)
+        return BrokenSession()
+
+    monkeypatch.setattr(runtime, "create_onnx_session", create_session)
+    assert build_default_engine(tmp_path / "bad.onnx").name == "Classical (fallback)"
+    assert calls == [["CUDAExecutionProvider"], ["CPUExecutionProvider"]]
