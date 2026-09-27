@@ -84,3 +84,8 @@ holes from surrounding context with an AI inpainting model.
 4. **Checksum is trust-on-first-use.** The model hash recorded after the first
    successful download is verified on every later load; a pinned hash in
    `config.MODEL_SHA256` is enforced when set.
+5. **Runtime quality tuning via `quality.ini`.** `quality.ini` in
+   `app_data_dir()` (`%LOCALAPPDATA%\ObjectRemover` on Windows) tunes the fill
+   — keys: `context_margin`, `multiscale`, `freq_sigma`, `harmonize`,
+   `blend_band`, `feather_sigma` (plus `multiscale_trigger`/`min`). The file is
+   re-read on every removal pass, so tuning needs no restart.

@@ -19,10 +19,59 @@ MODEL_IMAGE_INPUT = "image"
 MODEL_MASK_INPUT = "mask"
 MODEL_OUTPUT = "output"
 
-# --- Inpainting ---
+# --- Inpainting quality ---
 TILE_OVERLAP = 128          # overlap between native-resolution inference windows
-CONTEXT_MARGIN = 32         # extra context around the removal bounding box
+CONTEXT_MARGIN = 192        # real-context ring around the removal bbox (px/side)
 FEATHER_SIGMA = 1.0         # seam feather (px) inside the removal-mask edge
+TILE_BLEND_BAND = 32        # crossfade width at window-territory borders (px)
+MULTISCALE_TRIGGER = 0.6    # hole/window ratio that triggers the context pass
+MULTISCALE_MIN = 0.125      # smallest downscale factor of the context pass
+FREQ_SIGMA = 8.0            # px; detail band kept from the native pass
+HARMONIZE = 0.5             # 0..1; color-offset match of fill to its surroundings
+
+# Runtime quality tuning: defaults overridden by quality.ini in app_data_dir().
+# The file is re-read on every removal pass, so tuning needs no restart:
+#   freq_sigma=8.0        # lower = sharper but risk seams; higher = smoother
+#   harmonize=0.5         # 0 = no color match .. 1 = full mean-offset match
+#   blend_band=32         # window crossfade width; lower = sharper seams
+#   context_margin=192    # real context ring; higher = better but slower
+#   multiscale=1          # 0 = disable the scaled context pass
+#   feather_sigma=1.0     # seam feather inside the mask edge
+_QUALITY_DEFAULTS = {
+    "context_margin": float(CONTEXT_MARGIN),
+    "feather_sigma": float(FEATHER_SIGMA),
+    "blend_band": float(TILE_BLEND_BAND),
+    "multiscale": 1.0,
+    "multiscale_trigger": float(MULTISCALE_TRIGGER),
+    "multiscale_min": float(MULTISCALE_MIN),
+    "freq_sigma": float(FREQ_SIGMA),
+    "harmonize": float(HARMONIZE),
+}
+
+
+def quality() -> dict:
+    """Effective quality settings: defaults + quality.ini overrides.
+
+    Unknown keys and invalid values are ignored; a missing file means defaults.
+    """
+    q = dict(_QUALITY_DEFAULTS)
+    try:
+        text = (app_data_dir() / "quality.ini").read_text(encoding="utf-8")
+    except OSError:
+        return q
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";", "[")) or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        if key not in q:
+            continue
+        try:
+            q[key] = float(value.strip())
+        except ValueError:
+            pass
+    return q
 
 # --- UI ---
 PREVIEW_MAX_SIDE = 4096     # preview pyramid cap; masks stay full resolution
