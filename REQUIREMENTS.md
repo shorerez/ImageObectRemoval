@@ -80,7 +80,15 @@ holes from surrounding context with an AI inpainting model.
    TIFF EXIF write is not possible, export still succeeds (logged).
 3. **Fixed-shape model tiling.** The LaMa ONNX export is fixed at 512×512, so
    inference runs in native-resolution 512×512 windows with 128 px overlap and
-   feathered blending. No rescaling → no detail loss on large images.
+   narrow crossfades. Large holes also receive a downscaled context pass for
+   structure, combined with detail from the native pass. Boundary color matching
+   and scene-matched grain help the fill blend into its surroundings.
 4. **Checksum is trust-on-first-use.** The model hash recorded after the first
    successful download is verified on every later load; a pinned hash in
    `config.MODEL_SHA256` is enforced when set.
+5. **Runtime quality tuning.** Optional `quality.ini` in `config.app_data_dir()`
+   (`%LOCALAPPDATA%\ObjectRemover\quality.ini` on Windows) overrides quality
+   defaults with numeric `key=value` lines, e.g. `harmonize=1.0`, `texture=0.4`,
+   or `freq_sigma=8.0`. It is re-read on every removal pass; no restart is needed.
+   A missing file uses defaults; unknown keys and non-numeric values are ignored.
+   See `config.py` for the supported settings and defaults.

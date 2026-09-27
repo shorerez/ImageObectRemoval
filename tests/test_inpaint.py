@@ -33,13 +33,23 @@ def _img(h, w, value=30000):
     return np.full((h, w, 3), value, np.uint16)
 
 
+@pytest.fixture()
+def plain_quality(monkeypatch):
+    """Disable color/texture post-fills so tests can assert raw fill values."""
+    from object_remover import config, inpaint as mod
+
+    q = dict(config._QUALITY_DEFAULTS)
+    q.update(harmonize=0.0, texture=0.0)
+    monkeypatch.setattr(mod, "quality", lambda: q)
+
+
 def test_empty_removal_raises():
     svc = InpaintService(DummyEngine())
     with pytest.raises(InpaintError):
         svc.inpaint(_img(32, 32), np.zeros((32, 32), np.uint8))
 
 
-def test_protect_never_overwritten_and_unselected_exact():
+def test_protect_never_overwritten_and_unselected_exact(plain_quality):
     engine = DummyEngine(fill_value=0.0)
     svc = InpaintService(engine)
     pixels = _img(100, 100, 40000)
@@ -83,7 +93,7 @@ def test_protect_excluded_from_model_context():
     assert any(m.any() for m in seen_masks)
 
 
-def test_tiling_covers_large_hole_with_windows():
+def test_tiling_covers_large_hole_with_windows(plain_quality):
     engine = DummyEngine(input_size=512)
     svc = InpaintService(engine)
     pixels = _img(900, 700)

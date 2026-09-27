@@ -16,15 +16,21 @@ def available_providers() -> list[str]:
         return []
 
 
-def create_onnx_session(model_path: str | Path):
-    """Create an inference session preferring CUDA, falling back to CPU."""
+def create_onnx_session(
+    model_path: str | Path, providers: list[str] | None = None
+):
+    """Create a session with the requested provider preference order.
+
+    Defaults to CUDA then CPU. Explicit CPU-only requests allow callers to
+    retry after a provider fails the engine self-test.
+    """
     import onnxruntime as ort
 
     avail = ort.get_available_providers()
-    providers: list[str] = []
-    for pref in ("CUDAExecutionProvider", "CPUExecutionProvider"):
-        if pref in avail:
-            providers.append(pref)
+    preferred = providers if providers is not None else [
+        "CUDAExecutionProvider", "CPUExecutionProvider"
+    ]
+    providers = [pref for pref in preferred if pref in avail]
     if not providers:  # pragma: no cover - defensive
         providers = ["CPUExecutionProvider"]
     so = ort.SessionOptions()
