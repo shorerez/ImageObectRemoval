@@ -131,3 +131,97 @@ def test_canvas_mouse_painting(window, qt_app, tmp_path):
     assert doc.history.can_undo
     window._on_undo()
     assert not doc.removal.data.any()
+
+
+def _wait_idle(window, qt_app, timeout: float = 30.0) -> None:
+    """Spin the event loop until the current job finishes."""
+    import time
+
+    deadline = time.time() + timeout
+    while window._busy and time.time() < deadline:
+        qt_app.processEvents()
+        time.sleep(0.01)
+    assert not window._busy, "remove job did not finish in time"
+
+
+def _preview_bytes(window) -> bytes:
+    """Byte content of the canvas image preview (RGBA, no padding)."""
+    from PySide6.QtGui import QImage
+
+    img = window._canvas._image_item.pixmap().toImage()
+    img = img.convertToFormat(QImage.Format_RGBA8888)
+    return bytes(img.constBits())[: img.sizeInBytes()]
+
+
+def test_canvas_image_preview_refreshes_after_remove_and_undo(window, qt_app, tmp_path):
+    """Remove/Undo must rebuild the image preview, not only the mask overlays."""
+    path = _make_tiff(tmp_path, size=400)
+    window.open_path(path)
+    doc = window._doc
+
+    builder = doc.begin_stroke(MASK_REMOVAL, 25, 1.0, False)
+    builder.add_point(200, 200)
+    doc.commit_stroke(builder)
+    window._canvas.refresh_overlays()
+
+    before = _preview_bytes(window)
+
+    window._on_remove()
+    _wait_idle(window, qt_app)
+
+    after_remove = _preview_bytes(window)
+    assert after_remove != before, "canvas image preview is stale after Remove"
+
+    window._on_undo()
+    assert _preview_bytes(window) == before, "canvas image preview not restored by Undo"
+
+    window._on_redo()
+    assert _preview_bytes(window) == after_remove, "canvas image preview not re-applied by Redo"
+
+
+def test_overlap_dialog_accept_path_uses_class_dialogcode(window, qt_app, tmp_path, monkeypatch):
+    """`dlg.Accepted` is gone in PySide6 6.11 — the comparison must use the enum."""
+    from PySide6.QtWidgets import QDialog
+
+    from object_remover.document import MASK_PROTECT
+    from object_remover.ui.dialogs import OverlapDialog
+
+    path = _make_tiff(tmp_path)
+    window.open_path(path)
+    doc = window._doc
+    for mask_id in (MASK_REMOVAL, MASK_PROTECT):
+        builder = doc.begin_stroke(mask_id, 20, 1.0, False)
+        builder.add_point(150, 150)
+        doc.commit_stroke(builder)
+    assert doc.overlap_count() > 0
+
+    def fake_exec(self):
+        # "removal wins" keeps the removal mask usable (both blobs are identical
+        # here, so "protect wins" would legitimately empty it and fail the job).
+        self._choice = OverlapDialog.REMOVAL
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(OverlapDialog, "exec", fake_exec)
+    window._on_remove()  # raised AttributeError on PySide6 6.11 before the fix
+    _wait_idle(window, qt_app)
+    assert doc.overlap_count() == 0
+
+
+def test_export_dialog_accept_path_uses_class_dialogcode(window, qt_app, tmp_path, monkeypatch):
+    """Same PySide6 6.11 fix on the export path (`_on_export`)."""
+    from PySide6.QtWidgets import QDialog
+
+    from object_remover.ui.dialogs import ExportDialog
+
+    path = _make_tiff(tmp_path)
+    window.open_path(path)
+    target = tmp_path / "out.jpg"
+
+    def fake_exec(self):
+        self._path_edit.setText(str(target))
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(ExportDialog, "exec", fake_exec)
+    window._on_export()  # raised AttributeError on PySide6 6.11 before the fix
+    _wait_idle(window, qt_app)
+    assert target.stat().st_size > 0

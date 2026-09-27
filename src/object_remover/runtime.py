@@ -16,21 +16,30 @@ def available_providers() -> list[str]:
         return []
 
 
-def create_onnx_session(model_path: str | Path):
-    """Create an inference session preferring CUDA, falling back to CPU."""
+def create_onnx_session(model_path: str | Path, providers: list[str] | None = None):
+    """Create an inference session preferring CUDA, falling back to CPU.
+
+    ``providers`` restricts the session to the given execution providers (in
+    order). Providers absent from the build are skipped; if none of the
+    requested ones are available a RuntimeError is raised so the caller can
+    try the next candidate.
+    """
     import onnxruntime as ort
 
     avail = ort.get_available_providers()
-    providers: list[str] = []
-    for pref in ("CUDAExecutionProvider", "CPUExecutionProvider"):
-        if pref in avail:
-            providers.append(pref)
-    if not providers:  # pragma: no cover - defensive
-        providers = ["CPUExecutionProvider"]
+    if providers is None:
+        preferred = ("CUDAExecutionProvider", "CPUExecutionProvider")
+        selected = [p for p in preferred if p in avail]
+        if not selected:  # pragma: no cover - defensive
+            selected = ["CPUExecutionProvider"]
+    else:
+        selected = [p for p in providers if p in avail]
+        if not selected:
+            raise RuntimeError(f"None of {list(providers)} available (have {avail}).")
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     so.log_severity_level = 3
-    session = ort.InferenceSession(str(model_path), so, providers=providers)
+    session = ort.InferenceSession(str(model_path), so, providers=selected)
     log.info(
         "ONNX session: providers=%s (available=%s)",
         session.get_providers(),
