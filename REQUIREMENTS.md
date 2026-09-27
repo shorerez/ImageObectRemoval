@@ -81,6 +81,7 @@ holes from surrounding context with an AI inpainting model.
 3. **Fixed-shape model tiling.** The LaMa ONNX export is fixed at 512×512, so
    inference runs in native-resolution 512×512 windows with 128 px overlap and
    feathered blending. No rescaling → no detail loss on large images.
-4. **Checksum is trust-on-first-use.** The model hash recorded after the first
-   successful download is verified on every later load; a pinned hash in
-   `config.MODEL_SHA256` is enforced when set.
+4. **Checksum is pinned, with trust-on-first-use as the fallback.** The
+   SHA-256 of `lama_fp32.onnx` is pinned in `config.MODEL_SHA256` and enforced
+   on every download. If it is unset, the hash recorded after the first
+   successful download is verified on every later load instead.

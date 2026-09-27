@@ -113,13 +113,7 @@ class MaskCanvas(QGraphicsView):
         self._scale = s
         self._preview_size = (pw, ph)
 
-        rgb8 = _u16_to_u8(doc.image.pixels)
-        if (pw, ph) != (w, h):
-            import cv2
-
-            rgb8 = cv2.resize(rgb8, (pw, ph), interpolation=cv2.INTER_AREA)
-        qimg = QImage(rgb8.data, pw, ph, 3 * pw, QImage.Format_RGB888).copy()
-        self._image_item.setPixmap(QPixmap.fromImage(qimg))
+        self.refresh_image()
 
         for mask_id in (MASK_REMOVAL, MASK_PROTECT):
             arr = np.zeros((ph, pw, 4), dtype=np.uint8)
@@ -134,6 +128,26 @@ class MaskCanvas(QGraphicsView):
         self._scene.setSceneRect(0, 0, pw, ph)
         self.resetTransform()
         self.fitInView(self._scene.sceneRect(), Qt.KeepAspectRatio)
+
+    # ---------------------------------------------------------------- preview
+    def refresh_image(self) -> None:
+        """Rebuild the image preview pixmap from the document's current pixels.
+
+        Required after anything that changes pixels (Remove, undo, redo):
+        :meth:`refresh_overlays` only repaints the mask overlays, so without
+        this the user keeps looking at the pre-removal image.
+        """
+        if self._doc is None:
+            return
+        pw, ph = self._preview_size
+        w, h = self._doc.image.width, self._doc.image.height
+        rgb8 = _u16_to_u8(self._doc.image.pixels)
+        if (pw, ph) != (w, h):
+            import cv2
+
+            rgb8 = cv2.resize(rgb8, (pw, ph), interpolation=cv2.INTER_AREA)
+        qimg = QImage(rgb8.data, pw, ph, 3 * pw, QImage.Format_RGB888).copy()
+        self._image_item.setPixmap(QPixmap.fromImage(qimg))
 
     # ------------------------------------------------------------------ state
     def set_active_mask(self, mask_id: str) -> None:

@@ -11,9 +11,12 @@ APP_VERSION = "0.1.0"
 # --- AI model (LaMa ONNX, Apache-2.0 weights, Carve/LaMa-ONNX export) ---
 MODEL_FILENAME = "lama_fp32.onnx"
 MODEL_URL = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx"
-# Pinned SHA-256 of MODEL_URL. None = trust-on-first-use: the hash recorded on
-# the first successful download is verified on every later load.
-MODEL_SHA256: str | None = None
+# Pinned SHA-256 of MODEL_URL (Carve/LaMa-ONNX lama_fp32.onnx). Setting it to
+# None degrades to trust-on-first-use: the hash recorded on the first
+# successful download is verified on every later load.
+MODEL_SHA256: str | None = (
+    "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
+)
 MODEL_INPUT_SIZE = 512  # fixed input shape of the ONNX export
 MODEL_IMAGE_INPUT = "image"
 MODEL_MASK_INPUT = "mask"

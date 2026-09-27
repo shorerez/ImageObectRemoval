@@ -68,7 +68,20 @@ UI never blocks and every job is cancellable.
 | `OnnxLamaEngine` | model present | Carve/LaMa-ONNX `lama_fp32.onnx`; inputs `image`/`mask`, fixed 512², output `output`; CUDA EP preferred, CPU fallback |
 | `ClassicalEngine` | model missing / download pending | `cv2.inpaint` (Telea) — lower quality, keeps app usable and tests deterministic |
 
-`runtime.create_session()` prefers `CUDAExecutionProvider`, falls back to CPU.
+`runtime.create_session()` prefers `CUDAExecutionProvider`, falls back to CPU;
+`build_default_engine()` tries each provider in turn (CUDA, then CPU) and ends
+on `ClassicalEngine`.
+
+**Output scale is measured, not assumed.** The Carve `lama_fp32.onnx` export
+returns pixels in **0..255** (its own demo casts the raw output straight to
+`uint8`), while the PyTorch model and most re-exports stay in **0..1**;
+clipping a 0..255 output to [0, 1] turns every fill solid white. On
+construction `OnnxLamaEngine` therefore runs a synthetic self-test (gray 512²
+tile, centred hole) and derives the scale from the untouched context level,
+normalising the raw output in `fill()`. A session whose self-test output is
+non-finite or matches no plausible scale (1x/255x) is rejected, so a broken
+provider degrades instead of painting white.
+
 `runtime.probe_vram()` (pynvml if available) feeds the status bar; the
 fixed 512² window keeps inference memory tiny regardless of image size.
 
