@@ -113,14 +113,6 @@ class MaskCanvas(QGraphicsView):
         self._scale = s
         self._preview_size = (pw, ph)
 
-        rgb8 = _u16_to_u8(doc.image.pixels)
-        if (pw, ph) != (w, h):
-            import cv2
-
-            rgb8 = cv2.resize(rgb8, (pw, ph), interpolation=cv2.INTER_AREA)
-        qimg = QImage(rgb8.data, pw, ph, 3 * pw, QImage.Format_RGB888).copy()
-        self._image_item.setPixmap(QPixmap.fromImage(qimg))
-
         for mask_id in (MASK_REMOVAL, MASK_PROTECT):
             arr = np.zeros((ph, pw, 4), dtype=np.uint8)
             color = REMOVAL_COLOR if mask_id == MASK_REMOVAL else PROTECT_COLOR
@@ -131,9 +123,30 @@ class MaskCanvas(QGraphicsView):
             )
         self._removal_item.setPixmap(QPixmap.fromImage(self._overlay_images[MASK_REMOVAL]))
         self._protect_item.setPixmap(QPixmap.fromImage(self._overlay_images[MASK_PROTECT]))
+        self.refresh_image()
         self._scene.setSceneRect(0, 0, pw, ph)
         self.resetTransform()
         self.fitInView(self._scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def refresh_image(self) -> None:
+        """Rebuild the display-only image preview from the document pixels.
+
+        Needed after anything that changes pixels (Remove, undo/redo of a
+        removal) — refresh_overlays() only redraws the two mask layers, so
+        without this the canvas keeps showing the pre-removal pixels.
+        """
+        if self._doc is None:
+            return
+        w, h = self._doc.image.width, self._doc.image.height
+        pw, ph = self._preview_size
+        rgb8 = _u16_to_u8(self._doc.image.pixels)
+        if (pw, ph) != (w, h):
+            import cv2
+
+            rgb8 = cv2.resize(rgb8, (pw, ph), interpolation=cv2.INTER_AREA)
+        rgb8 = np.ascontiguousarray(rgb8)
+        qimg = QImage(rgb8.data, pw, ph, 3 * pw, QImage.Format_RGB888).copy()
+        self._image_item.setPixmap(QPixmap.fromImage(qimg))
 
     # ------------------------------------------------------------------ state
     def set_active_mask(self, mask_id: str) -> None:

@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -288,11 +289,13 @@ class MainWindow(QMainWindow):
 
     def _on_undo(self) -> None:
         if self._doc and self._doc.undo():
+            self._canvas.refresh_image()
             self._canvas.refresh_overlays()
             self._update_action_state()
 
     def _on_redo(self) -> None:
         if self._doc and self._doc.redo():
+            self._canvas.refresh_image()
             self._canvas.refresh_overlays()
             self._update_action_state()
 
@@ -313,7 +316,9 @@ class MainWindow(QMainWindow):
         overlap = doc.overlap_count()
         if overlap:
             dlg = OverlapDialog(overlap, self)
-            if dlg.exec() != dlg.Accepted or dlg.choice is None:
+            # QDialog.DialogCode.Accepted: the unscoped dlg.Accepted alias is
+            # gone from PySide6 instances since 6.9 (AttributeError on 6.11).
+            if dlg.exec() != QDialog.DialogCode.Accepted or dlg.choice is None:
                 self._status_message("Remove cancelled — fix the masks and try again.")
                 return
             doc.resolve_overlap(dlg.choice)
@@ -339,6 +344,8 @@ class MainWindow(QMainWindow):
         if self._doc is None:
             return
         self._doc.apply_removal(new_pixels)
+        # Pixels changed: rebuild the image preview first, then the mask layers.
+        self._canvas.refresh_image()
         self._canvas.refresh_overlays()
         self._update_action_state()
         self._status_message(
@@ -353,7 +360,7 @@ class MainWindow(QMainWindow):
             return
         default_dir = str(Path(doc.image.source_path).parent) if doc.image.source_path else ""
         dlg = ExportDialog(default_dir, self)
-        if dlg.exec() != dlg.Accepted:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         target = dlg.export_path
         as_jpg = dlg.as_jpg

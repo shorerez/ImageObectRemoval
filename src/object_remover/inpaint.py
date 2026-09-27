@@ -50,19 +50,34 @@ class Engine(Protocol):
 
 
 class OnnxLamaEngine:
-    """LaMa ONNX (Carve/LaMa-ONNX): fixed inputs image/mask -> output."""
+    """LaMa ONNX (Carve/LaMa-ONNX): fixed inputs image/mask -> output.
+
+    The published ``lama_fp32.onnx`` export takes 0..1 inputs but returns RGB
+    on a **0..255** scale (the upstream demo casts its output straight to
+    ``uint8``). Re-exports such as ``sapienkit/LaMa-ONNX`` document the same
+    contract, while other exports answer in 0..1. Clipping the raw output to
+    [0, 1] therefore turns every fill solid white, so the scale is *measured*
+    once in the constructor with a synthetic self-test instead of assumed.
+    """
 
     name = "LaMa (AI)"
+
+    #: level/probe ratio above which the output must be 0..255 (a 1x engine
+    #: answers ~1x, a 255x engine ~255x, so the margin is huge either way)
+    _SCALE_RATIO = 8.0
+    #: a sane fill stays inside [-2, 4] once divided by the detected scale
+    _MAX_SANE = 4.0
+    _MIN_SANE = -2.0
 
     def __init__(self, session, input_size: int = MODEL_INPUT_SIZE) -> None:
         self._session = session
         self.input_size = int(input_size)
         self._out_name = MODEL_OUTPUT
+        self.output_scale = self._detect_output_scale()
 
-    def fill(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        s = self.input_size
-        if tile.shape[0] != s or tile.shape[1] != s:
-            raise InpaintError(f"OnnxLamaEngine expects {s}x{s} tiles, got {tile.shape}.")
+    # ------------------------------------------------------------- inference
+    def _run(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """One inference call; returns float32 (S, S, 3) at the model's scale."""
         image_t = tile.transpose(2, 0, 1)[None].astype(np.float32)
         mask_t = mask.astype(np.float32)[None, None]
         outputs = self._session.run(
@@ -73,7 +88,65 @@ class OnnxLamaEngine:
             out = outputs[names.index(self._out_name)]
         else:  # pragma: no cover - defensive
             out = outputs[0]
-        out = out[0].transpose(1, 2, 0)
+        out = np.asarray(out[0]).transpose(1, 2, 0)
+        return out.astype(np.float32, copy=False)
+
+    def _detect_output_scale(self) -> float:
+        """Measure whether the model answers in 0..1 or 0..255.
+
+        Feeds a uniform 0.5 gray tile with a center hole: a working engine
+        echoes the known (unmasked) pixels, so the output level divided by the
+        0.5 input is 1x or 255x. Non-finite or absurd answers mean the provider
+        is broken and the caller should reject it.
+        """
+        s = self.input_size
+        probe_level = 0.5
+        tile = np.full((s, s, 3), probe_level, dtype=np.float32)
+        mask = np.zeros((s, s), dtype=np.float32)
+        h0, h1 = s // 4, s - s // 4
+        mask[h0:h1, h0:h1] = 1.0
+
+        out = self._run(tile, mask)
+        if out.ndim != 3 or out.shape[0] != s or out.shape[1] != s or out.shape[2] < 3:
+            raise InpaintError(
+                f"ONNX output shape {out.shape} is not ({s}, {s}, >=3)."
+            )
+        if not np.isfinite(out).all():
+            raise InpaintError("ONNX output contains non-finite values (NaN/Inf).")
+
+        known = mask < 0.5
+        # A working engine echoes the known pixels, so the context level divided
+        # by the 0.5 probe input is 1x or 255x. The full-output mean is a second
+        # opinion for engines that only return the filled region.
+        measured = max(
+            float(np.mean(out[known])) if known.any() else 0.0,
+            float(np.mean(out)),
+        )
+        if not np.isfinite(measured):  # pragma: no cover - defensive
+            raise InpaintError("ONNX output level is not finite.")
+        scale = 255.0 if measured / probe_level > self._SCALE_RATIO else 1.0
+
+        scaled = out / scale
+        lo, hi = float(scaled.min()), float(scaled.max())
+        if hi > self._MAX_SANE or lo < self._MIN_SANE:
+            raise InpaintError(
+                "ONNX output is out of range after scale detection "
+                f"(level {measured:.3g}, range {lo:.3g}..{hi:.3g})."
+            )
+        log.info(
+            "LaMa ONNX output scale detected: %.0fx (probe level %.4g -> %.4g)",
+            scale, probe_level, measured,
+        )
+        return scale
+
+    def fill(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        s = self.input_size
+        if tile.shape[0] != s or tile.shape[1] != s:
+            raise InpaintError(f"OnnxLamaEngine expects {s}x{s} tiles, got {tile.shape}.")
+        out = self._run(tile, mask)
+        out = out / self.output_scale
+        if not np.isfinite(out).all():
+            raise InpaintError("LaMa ONNX returned non-finite values.")
         return np.clip(out, 0.0, 1.0).astype(np.float32)
 
 
@@ -247,15 +320,32 @@ def _window_weights(size: int, wy: int, wx: int, hp: int, wp: int) -> np.ndarray
 
 
 def build_default_engine(model_path=None):
-    """Best available engine: LaMa ONNX when the model file exists."""
-    if model_path is not None:
-        try:
-            from .runtime import create_onnx_session
+    """Best available engine: LaMa ONNX (CUDA first, then CPU), else classical.
 
-            session = create_onnx_session(model_path)
-            engine: Engine = OnnxLamaEngine(session)
-            log.info("Inpaint engine: %s (%s)", engine.name, model_path)
-            return engine
-        except Exception as exc:
-            log.warning("Could not load ONNX model (%s); using classical fallback.", exc)
+    Each provider gets its own attempt: a session that loads but produces
+    unusable output (bad provider, corrupt weights) must not stop the app from
+    starting, so the next provider is tried and the classical engine is the
+    last resort.
+    """
+    if model_path is not None:
+        from .runtime import available_providers, create_onnx_session
+
+        avail = available_providers()
+        providers = [
+            p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in avail
+        ] or ["CPUExecutionProvider"]
+        for provider in providers:
+            try:
+                session = create_onnx_session(model_path, providers=[provider])
+                engine: Engine = OnnxLamaEngine(session)
+                log.info(
+                    "Inpaint engine: %s (%s, provider=%s, output scale=%.0fx)",
+                    engine.name, model_path, provider, engine.output_scale,
+                )
+                return engine
+            except Exception as exc:
+                log.warning(
+                    "ONNX engine unavailable with %s (%s); trying the next provider.",
+                    provider, exc,
+                )
     return ClassicalEngine()

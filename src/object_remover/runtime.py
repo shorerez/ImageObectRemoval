@@ -16,15 +16,19 @@ def available_providers() -> list[str]:
         return []
 
 
-def create_onnx_session(model_path: str | Path):
-    """Create an inference session preferring CUDA, falling back to CPU."""
+def create_onnx_session(model_path: str | Path, providers: list[str] | None = None):
+    """Create an inference session preferring CUDA, falling back to CPU.
+
+    Pass ``providers`` to force one specific execution provider (used by
+    build_default_engine to try CUDA and CPU as separate attempts).
+    """
     import onnxruntime as ort
 
     avail = ort.get_available_providers()
-    providers: list[str] = []
-    for pref in ("CUDAExecutionProvider", "CPUExecutionProvider"):
-        if pref in avail:
-            providers.append(pref)
+    if providers is None:
+        providers = [
+            p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in avail
+        ]
     if not providers:  # pragma: no cover - defensive
         providers = ["CPUExecutionProvider"]
     so = ort.SessionOptions()
