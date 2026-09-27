@@ -87,6 +87,187 @@ def test_full_remove_flow_with_job(window, qt_app, tmp_path):
     assert out.stat().st_size > 0
 
 
+def _preview_rgb(canvas) -> np.ndarray:
+    """The canvas image preview as an (H, W, 3) uint8 array."""
+    from PySide6.QtGui import QImage
+
+    pix = canvas._image_item.pixmap()
+    assert not pix.isNull(), "canvas has no image preview"
+    img = pix.toImage().convertToFormat(QImage.Format_RGB888)
+    buf = np.frombuffer(
+        img.constBits(), np.uint8, count=img.sizeInBytes()
+    ).reshape(img.height(), img.bytesPerLine())
+    return buf[:, : img.width() * 3].reshape(img.height(), img.width(), 3).copy()
+
+
+def _make_tiff_with_block(tmp_path, size=300):
+    """Gradient with a bright block in the middle so a fill is clearly visible."""
+    import tifffile
+
+    y, x = np.mgrid[0:size, 0:size].astype(np.float32)
+    img = np.stack([x * 200, y * 200, (x + y) * 100], axis=-1)
+    c = size // 2
+    img[c - 40 : c + 40, c - 40 : c + 40] = 65535.0
+    path = tmp_path / "block.tif"
+    tifffile.imwrite(path, img.astype(np.uint16), photometric="rgb")
+    return path
+
+
+def _wait_for_job(window, qt_app, timeout=30.0) -> None:
+    import time
+
+    deadline = time.time() + timeout
+    while window._busy and time.time() < deadline:
+        qt_app.processEvents()
+        time.sleep(0.01)
+    assert not window._busy, "removal job did not finish"
+
+
+def test_canvas_preview_follows_remove_and_undo(window, qt_app, tmp_path, no_modal):
+    """The image preview must redraw after Remove and restore after Undo."""
+    from object_remover.ui.canvas import _u16_to_u8
+
+    path = _make_tiff_with_block(tmp_path)
+    window.open_path(path)
+    canvas, doc = window._canvas, window._doc
+
+    before = _preview_rgb(canvas)
+    # the preview mirrors the document pixels (300 px < PREVIEW_MAX_SIDE)
+    np.testing.assert_array_equal(before, _u16_to_u8(doc.image.pixels))
+
+    builder = doc.begin_stroke(MASK_REMOVAL, 35, 1.0, False)
+    builder.add_point(150, 150)
+    assert doc.commit_stroke(builder)
+
+    window._on_remove()
+    assert window._busy
+    _wait_for_job(window, qt_app)
+
+    after = _preview_rgb(canvas)
+    assert not np.array_equal(before, after), "preview kept stale pixels after Remove"
+    np.testing.assert_array_equal(after, _u16_to_u8(doc.image.pixels))
+
+    # Undo restores both the pixels and the preview
+    window._on_undo()
+    np.testing.assert_array_equal(_preview_rgb(canvas), before)
+
+    # ... and Redo re-applies them
+    window._on_redo()
+    np.testing.assert_array_equal(_preview_rgb(canvas), after)
+
+
+def _fake_dialog_class(result: int, **props):
+    """A QDialog subclass whose exec() returns `result` (DialogCode value)."""
+    from PySide6.QtWidgets import QDialog
+
+    class _FakeDialog(QDialog):
+        def __init__(self, *args, **kwargs):
+            super().__init__(None)
+
+        def exec(self):  # noqa: N802 - Qt naming
+            return result
+
+    for name, value in props.items():
+        setattr(_FakeDialog, name, property(lambda self, v=value: v))
+    return _FakeDialog
+
+
+@pytest.fixture()
+def no_modal(monkeypatch):
+    """Turn blocking message boxes into failures (they would hang the run)."""
+    from PySide6.QtWidgets import QMessageBox
+
+    def _fail(*args, **kwargs):
+        raise AssertionError(f"unexpected modal dialog: {args[1:3]}")
+
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(_fail))
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(_fail))
+
+
+def test_export_dialog_accepted_uses_dialogcode(
+    window, qt_app, tmp_path, monkeypatch, no_modal
+):
+    """_on_export must compare exec() with QDialog.DialogCode.Accepted.
+
+    PySide6 removed the unscoped `dlg.Accepted` alias from dialog *instances*
+    (AttributeError on 6.11), so the old comparison crashed instead of
+    exporting.
+    """
+    from PySide6.QtWidgets import QDialog
+
+    import object_remover.ui.main_window as mw
+
+    window.open_path(_make_tiff(tmp_path, size=64))
+    out = tmp_path / "exported.jpg"
+
+    monkeypatch.setattr(
+        mw,
+        "ExportDialog",
+        _fake_dialog_class(
+            int(QDialog.DialogCode.Accepted),
+            export_path=out, as_jpg=True, jpg_quality=90,
+        ),
+    )
+    window._on_export()
+    assert window._busy, "accepted export dialog must start the export job"
+    _wait_for_job(window, qt_app)
+    assert out.is_file() and out.stat().st_size > 0
+
+
+def test_export_dialog_rejected_does_not_export(window, qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QDialog
+
+    import object_remover.ui.main_window as mw
+
+    window.open_path(_make_tiff(tmp_path, size=64))
+    out = tmp_path / "not_exported.jpg"
+    monkeypatch.setattr(
+        mw,
+        "ExportDialog",
+        _fake_dialog_class(
+            int(QDialog.DialogCode.Rejected),
+            export_path=out, as_jpg=True, jpg_quality=90,
+        ),
+    )
+    window._on_export()
+    assert not window._busy
+    assert not out.exists()
+
+
+def test_remove_overlap_dialog_accepted_uses_dialogcode(
+    window, qt_app, tmp_path, monkeypatch, no_modal
+):
+    """Same fix on the overlap branch of _on_remove."""
+    from PySide6.QtWidgets import QDialog
+
+    import object_remover.ui.main_window as mw
+    from object_remover.document import MASK_PROTECT
+
+    window.open_path(_make_tiff(tmp_path, size=200))
+    doc = window._doc
+    # Partially overlapping strokes: removing the overlap must still leave a
+    # removal mask, otherwise there is nothing to inpaint.
+    for mask_id, point, radius in (
+        (MASK_REMOVAL, (90, 100), 30),
+        (MASK_PROTECT, (125, 100), 14),
+    ):
+        builder = doc.begin_stroke(mask_id, radius, 1.0, False)
+        builder.add_point(*point)
+        assert doc.commit_stroke(builder)
+    assert doc.overlap_count() > 0
+
+    monkeypatch.setattr(
+        mw,
+        "OverlapDialog",
+        _fake_dialog_class(int(QDialog.DialogCode.Accepted), choice="protect"),
+    )
+    window._on_remove()
+    assert window._busy, "accepted overlap dialog must start the removal job"
+    _wait_for_job(window, qt_app)
+    assert doc.overlap_count() == 0
+    assert not doc.removal.data.any()  # removal ran to completion
+
+
 def test_overlap_flow(window, tmp_path):
     from object_remover.document import MASK_PROTECT
 

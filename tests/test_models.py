@@ -63,6 +63,24 @@ def test_pinned_hash_enforced(tmp_path, fake_model):
         mgr.download()
 
 
+def test_config_pin_is_the_published_lama_hash(tmp_path, fake_model):
+    """The default pin is the published lama_fp32.onnx hash and is enforced."""
+    from object_remover.config import MODEL_SHA256
+
+    assert MODEL_SHA256 == (
+        "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6"
+    )
+    # ModelManager picks the pin up from config by default (no pinned= argument)
+    mgr = ModelManager(
+        directory=tmp_path / "models",
+        url=fake_model.as_uri(),
+        filename="lama_fp32.onnx",
+    )
+    with pytest.raises(ModelDownloadError, match="checksum"):
+        mgr.download()
+    assert not mgr.path.exists()
+
+
 def test_cancel_before_download(tmp_path, fake_model):
     mgr = _manager(tmp_path, fake_model.as_uri())
     cancel = threading.Event()
