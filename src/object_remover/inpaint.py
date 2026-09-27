@@ -49,20 +49,46 @@ class Engine(Protocol):
         ...
 
 
+#: Providers tried for the ONNX model, in order.
+PREFERRED_PROVIDERS = ("CUDAExecutionProvider", "CPUExecutionProvider")
+
+#: Gray level of the synthetic self-test tile and the expected fill level.
+PROBE_LEVEL = 0.5
+
+
 class OnnxLamaEngine:
-    """LaMa ONNX (Carve/LaMa-ONNX): fixed inputs image/mask -> output."""
+    """LaMa ONNX (Carve/LaMa-ONNX): fixed inputs image/mask -> output.
+
+    Output scale is *not* part of the ONNX contract and differs between
+    exports: the Carve ``lama_fp32.onnx`` export returns pixels in **0..255**
+    (its own demo casts the raw output straight to ``uint8``), while the
+    PyTorch model and most re-exports stay in **0..1**. Clipping a 0..255
+    output to [0, 1] turns every fill solid white, so the engine measures the
+    scale once at construction with a synthetic self-test (gray tile with a
+    centred hole: the untouched context level reveals 1x vs 255x) and
+    normalises the raw output to 0..1 in :meth:`fill`.
+
+    A session whose self-test output is non-finite or whose level matches no
+    plausible scale is rejected with :class:`InpaintError`, so
+    :func:`build_default_engine` can try the next provider and finally fall
+    back to :class:`ClassicalEngine`.
+    """
 
     name = "LaMa (AI)"
 
-    def __init__(self, session, input_size: int = MODEL_INPUT_SIZE) -> None:
+    def __init__(
+        self,
+        session,
+        input_size: int = MODEL_INPUT_SIZE,
+    ) -> None:
         self._session = session
         self.input_size = int(input_size)
         self._out_name = MODEL_OUTPUT
+        self.output_scale = self._detect_output_scale()
 
-    def fill(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        s = self.input_size
-        if tile.shape[0] != s or tile.shape[1] != s:
-            raise InpaintError(f"OnnxLamaEngine expects {s}x{s} tiles, got {tile.shape}.")
+    # ------------------------------------------------------------------ run
+    def _run_raw(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """One inference pass; returns the raw (un-normalised) (S, S, 3) output."""
         image_t = tile.transpose(2, 0, 1)[None].astype(np.float32)
         mask_t = mask.astype(np.float32)[None, None]
         outputs = self._session.run(
@@ -73,8 +99,57 @@ class OnnxLamaEngine:
             out = outputs[names.index(self._out_name)]
         else:  # pragma: no cover - defensive
             out = outputs[0]
-        out = out[0].transpose(1, 2, 0)
-        return np.clip(out, 0.0, 1.0).astype(np.float32)
+        return np.asarray(out[0].transpose(1, 2, 0), dtype=np.float32)
+
+    def _detect_output_scale(self) -> float:
+        """Measure the model's output scale on a synthetic tile (see class doc)."""
+        s = self.input_size
+        tile = np.full((s, s, 3), PROBE_LEVEL, dtype=np.float32)
+        mask = np.zeros((s, s), dtype=np.float32)
+        quarter = s // 4
+        mask[quarter : s - quarter, quarter : s - quarter] = 1.0
+
+        try:
+            raw = self._run_raw(tile, mask)
+        except InpaintError:
+            raise
+        except Exception as exc:  # provider/inference failure
+            raise InpaintError(f"ONNX self-test failed: {exc}") from exc
+
+        if raw.ndim != 3 or raw.shape[2] != 3 or raw.shape[:2] != (s, s):
+            raise InpaintError(
+                f"ONNX self-test expected ({s}, {s}, 3) output, got {raw.shape}."
+            )
+        if not np.isfinite(raw).all():
+            raise InpaintError(
+                "ONNX self-test produced non-finite output — provider rejected."
+            )
+
+        context = float(raw[mask < 0.5].mean(dtype=np.float64))
+        ratio = context / PROBE_LEVEL
+        if not 0.2 < ratio < 400:
+            raise InpaintError(
+                f"ONNX self-test context ratio is implausible ({ratio:.4g}) "
+                "— provider rejected."
+            )
+        scale = 255.0 if ratio > 10 else 1.0
+        hole_median = float(np.median(raw[mask > 0.5]))
+        if not 0.02 * scale < hole_median < 0.98 * scale:
+            raise InpaintError(
+                f"ONNX self-test hole median is implausible ({hole_median:.4g} "
+                f"at scale {scale:g}) — provider rejected."
+            )
+        log.info("LaMa self-test OK: output scale = %g", scale)
+        return scale
+
+    def fill(self, tile: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        s = self.input_size
+        if tile.shape[0] != s or tile.shape[1] != s:
+            raise InpaintError(f"OnnxLamaEngine expects {s}x{s} tiles, got {tile.shape}.")
+        raw = self._run_raw(tile, mask)
+        if not np.isfinite(raw).all():
+            raise InpaintError("LaMa produced non-finite output for a window.")
+        return np.clip(raw / self.output_scale, 0.0, 1.0).astype(np.float32)
 
 
 class ClassicalEngine:
@@ -247,15 +322,31 @@ def _window_weights(size: int, wy: int, wx: int, hp: int, wp: int) -> np.ndarray
 
 
 def build_default_engine(model_path=None):
-    """Best available engine: LaMa ONNX when the model file exists."""
-    if model_path is not None:
-        try:
-            from .runtime import create_onnx_session
+    """Best available engine: LaMa ONNX via CUDA, then CPU, then classical.
 
-            session = create_onnx_session(model_path)
+    Each provider is tried with a fresh session and validated by the engine's
+    output-scale self-test, so a broken CUDA install or a model whose output
+    cannot be normalised degrades to the next option instead of producing
+    white fills.
+    """
+    if model_path is None:
+        return ClassicalEngine()
+
+    from .runtime import create_onnx_session
+
+    reasons: list[str] = []
+    for provider in PREFERRED_PROVIDERS:
+        try:
+            session = create_onnx_session(model_path, providers=[provider])
             engine: Engine = OnnxLamaEngine(session)
-            log.info("Inpaint engine: %s (%s)", engine.name, model_path)
-            return engine
         except Exception as exc:
-            log.warning("Could not load ONNX model (%s); using classical fallback.", exc)
+            reasons.append(f"{provider}: {exc}")
+            log.warning("LaMa ONNX unusable on %s (%s).", provider, exc)
+            continue
+        log.info("Inpaint engine: %s on %s (%s)", engine.name, provider, model_path)
+        return engine
+
+    log.warning(
+        "Using the classical fallback engine (%s)", "; ".join(reasons) or "no model"
+    )
     return ClassicalEngine()
