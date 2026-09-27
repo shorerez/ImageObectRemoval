@@ -1,0 +1,5 @@
+# Windows GPU target: onnxruntime with CUDA execution provider.
+# (Do NOT install requirements-cpu.txt in the same venv — the two ORT builds
+#  provide the same Python package.)
+-r requirements.txt
+onnxruntime-gpu>=1.17

@@ -1,0 +1,3 @@
+# CPU-only / development.
+-r requirements.txt
+onnxruntime>=1.17
