@@ -68,3 +68,22 @@ iscc packaging\installer.iss
   with 128 px overlap and feathered blending — no detail loss on huge images.
 - Protected pixels are never overwritten and never used as fill source.
 - Export never modifies the source image.
+
+## Diagnostics (opt-in)
+
+Capture is off by default. To record each fill stage of a removal run,
+create an empty file named `diagnostics.enabled` in
+`%LOCALAPPDATA%\ObjectRemover` (the same app-data folder as `quality.ini`).
+While that marker exists, every removal writes a uniquely named folder under
+`%LOCALAPPDATA%\ObjectRemover\diagnostics\` containing `00-original.png`
+(cropped region), `mask.png` (effective removal mask), `01-native.png`,
+`02-context.png` (only when the context pass ran),
+`03-combined-before-corrections.png`, `04-final.png`, and `metadata.json`
+(engine, quality settings, crop coordinates, context-pass info).
+
+Everything is written locally — no upload or network activity. The
+diagnostic images are 8-bit PNGs and **may not preserve the
+ICC/color-management appearance** of the original; compare structure and
+relative color between stages rather than against the exported file. Any
+write error is logged and never affects the removal result. Delete the
+marker file to turn capture off.

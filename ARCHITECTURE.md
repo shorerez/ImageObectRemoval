@@ -101,6 +101,7 @@ src/object_remover/
 ├── image_io.py        WorkingImage, load_image, export_jpg, export_tiff
 ├── document.py        ImageDocument, MaskLayer, commands, History, stroke math
 ├── inpaint.py         InpaintService, OnnxLamaEngine, ClassicalEngine
+├── diagnostics.py     opt-in local capture of one removal run (see README)
 ├── models.py          ModelManager
 ├── runtime.py         ONNX session factory, VRAM probe
 ├── jobs.py            QThread job runner (Qt side only)
