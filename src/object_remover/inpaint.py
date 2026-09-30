@@ -33,6 +33,7 @@ from .config import (
     TILE_OVERLAP,
     quality,
 )
+from .diagnostics import DiagnosticCapture
 from .errors import CancelledError, InpaintError
 
 log = logging.getLogger(__name__)
@@ -375,6 +376,13 @@ class InpaintService:
         reg_rem = rem[y0:y1, x0:x1]
         h, w = region.shape[:2]
 
+        # Opt-in local diagnostics (marker file in app_data_dir); best-effort,
+        # never raises, never alters the removal (see diagnostics module).
+        diag = DiagnosticCapture.maybe(self.engine.name, size, q)
+        if diag is not None:
+            diag.add_image("00-original.png", pixels[y0:y1, x0:x1])
+            diag.add_image("mask.png", reg_rem)
+
         def _count(ph, pw):
             hp_, wp_ = max(ph, size), max(pw, size)
             return len(_window_starts(hp_, size, step)) * len(
@@ -399,11 +407,29 @@ class InpaintService:
                 "Large removal: context pass at %d%% (%dx%d -> %dx%d)",
                 round(scale * 100), w, h, sw, sh,
             )
+            context_pass_info = {
+                "ran": True,
+                "downscale": float(scale),
+                "scaled_size": {"width": sw, "height": sh},
+                "reason": "hole exceeds native-window trigger",
+            }
+        elif float(q["multiscale"]) > 0:
+            context_pass_info = {
+                "ran": False,
+                "reason": "hole fits within the native window",
+            }
+        else:
+            context_pass_info = {
+                "ran": False,
+                "reason": "disabled in quality settings",
+            }
 
         done = 0
         native, done = _tiled_fill(
             self.engine, region, reg_eff, q, cancel, progress, total, done
         )
+        if diag is not None:
+            diag.add_image("01-native.png", native)
 
         fill = native
         if scale < 1.0:
@@ -420,6 +446,8 @@ class InpaintService:
                 self.engine, small, small_eff, q, cancel, progress, total, done
             )
             ctx = cv2.resize(ctx_small, (w, h), interpolation=cv2.INTER_CUBIC)
+            if diag is not None:
+                diag.add_image("02-context.png", ctx)
             # Structure from the whole-context pass, fine detail from the
             # native pass — either alone looks wrong (mush vs. seams).
             sigma = float(q["freq_sigma"])
@@ -428,6 +456,9 @@ class InpaintService:
             else:
                 detail = np.zeros_like(native)
             fill = ctx + detail
+
+        if diag is not None:
+            diag.add_image("03-combined-before-corrections.png", fill)
 
         # Color + texture: the fill must sit in the scene's color statistics
         # and carry its grain, or the patch reads as a pasted blur.
@@ -457,6 +488,18 @@ class InpaintService:
         filled_u16 = np.clip(np.rint(out_region * 65535.0), 0, 65535).astype(np.uint16)
         region_view = new_pixels[y0:y1, x0:x1]
         region_view[reg_rem] = filled_u16[reg_rem]
+
+        if diag is not None:
+            diag.add_image("04-final.png", new_pixels[y0:y1, x0:x1])
+            diag.finish(
+                crop=(y0, y1, x0, x1),
+                image_size=pixels.shape[:2],
+                mask={
+                    "removal_pixels_in_crop": int(reg_rem.sum()),
+                    "protect_pixels_in_crop": int(prot[y0:y1, x0:x1].sum()),
+                },
+                context_pass=context_pass_info,
+            )
 
         stats = InpaintStats(
             engine=self.engine.name,
