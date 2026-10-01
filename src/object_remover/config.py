@@ -26,9 +26,13 @@ TILE_OVERLAP = 128          # overlap between native-resolution inference window
 CONTEXT_MARGIN = 192        # real-context ring around the removal bbox (px/side)
 FEATHER_SIGMA = 1.0         # seam feather (px) inside the removal-mask edge
 TILE_BLEND_BAND = 32        # crossfade width at window-territory borders (px)
-MULTISCALE_TRIGGER = 0.6    # hole/window ratio that triggers the context pass
-MULTISCALE_MIN = 0.125      # smallest downscale factor of the context pass
-FREQ_SIGMA = 8.0            # px; detail band kept from the native pass
+MULTISCALE_TRIGGER = 0.6    # hole/window ratio that triggers the whole-hole seed
+MULTISCALE_MIN = 0.125      # smallest downscale factor of the whole-hole seed
+PEEL_BAND = 0.2             # band width (fraction of the window) refined per pass
+PEEL_MAX_UNKNOWN = 0.5      # hard cap on the masked share of a single window
+LADDER_RATIO = 1.8          # scale step between coarse-to-fine refinement levels
+LADDER_MAX_LEVELS = 2       # extra AI refinement levels between seed and native
+FREQ_SIGMA = 8.0            # deprecated: kept so existing quality.ini files parse
 HARMONIZE = 1.0             # 0..1; Lab mean/std match of fill to surroundings
 HARMONIZE_BAND = 24         # px; boundary band used for the color match
 TEXTURE = 1.0               # 0..1; high-frequency grain transplanted into fill
@@ -37,7 +41,6 @@ TEXTURE_SIGMA = 4.0         # px; high-pass cutoff of the transplanted grain
 
 # Runtime quality tuning: defaults overridden by quality.ini in app_data_dir().
 # The file is re-read on every removal pass, so tuning needs no restart:
-#   freq_sigma=8.0        # lower = sharper but risk seams; higher = smoother
 #   harmonize=1.0         # 0 = no color match .. 1 = full boundary-statistics match
 #   harmonize_band=24     # boundary band width for the color match
 #   texture=1.0           # 0 = no grain transplant .. 1 = full scene grain
@@ -45,8 +48,16 @@ TEXTURE_SIGMA = 4.0         # px; high-pass cutoff of the transplanted grain
 #   texture_sigma=4.0     # grain size; lower = finer grain
 #   blend_band=32         # window crossfade width; lower = sharper seams
 #   context_margin=192    # real context ring; higher = better but slower
-#   multiscale=1          # 0 = disable the scaled context pass
+#   multiscale=1          # 0 = classical whole-hole seed instead of the AI seed
+#   peel_band=0.2         # band width per pass (fraction of the window); lower =
+#                         # more, better-conditioned passes (thin rim = the model
+#                         # extends real structure instead of inventing a plateau)
+#   peel_max_unknown=0.5  # never ask a window to fill more than this share of it
+#   ladder=1              # 0 = jump from the seed straight to native scale
+#   ladder_ratio=1.8      # scale step between coarse-to-fine levels
+#   ladder_levels=2       # max levels between the seed and native scale
 #   feather_sigma=1.0     # seam feather inside the mask edge
+# freq_sigma is accepted (old quality.ini files) but no longer used.
 _QUALITY_DEFAULTS = {
     "context_margin": float(CONTEXT_MARGIN),
     "feather_sigma": float(FEATHER_SIGMA),
@@ -54,6 +65,11 @@ _QUALITY_DEFAULTS = {
     "multiscale": 1.0,
     "multiscale_trigger": float(MULTISCALE_TRIGGER),
     "multiscale_min": float(MULTISCALE_MIN),
+    "peel_band": float(PEEL_BAND),
+    "peel_max_unknown": float(PEEL_MAX_UNKNOWN),
+    "ladder": 1.0,
+    "ladder_ratio": float(LADDER_RATIO),
+    "ladder_levels": float(LADDER_MAX_LEVELS),
     "freq_sigma": float(FREQ_SIGMA),
     "harmonize": float(HARMONIZE),
     "harmonize_band": float(HARMONIZE_BAND),

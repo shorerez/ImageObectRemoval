@@ -39,10 +39,29 @@ UI never blocks and every job is cancellable.
    - defensive rule: protect wins on any residual overlap inside the service.
    - bounding box of removal + context margin, clamped to the image.
    - **effective model mask = removal ∪ protect** — protected pixels are
-     invisible to the model (excluded as fill source).
-   - the region is covered by native-resolution 512×512 windows
-     (step 384 = 512 − 128 overlap); each window goes through the engine;
-     outputs are accumulated with linear edge ramps and normalized.
+     invisible to the model (excluded as fill source) in every engine call.
+   - **stage 1, whole-hole seed**: if the hole exceeds the multiscale trigger,
+     the crop is downscaled until the hole fits one window with real
+     surroundings, filled in a single tiled sweep, and upscaled; only unknown
+     pixels are seeded, so real pixels stay bit-exact. (`multiscale=0` falls
+     back to a cheap classical Telea seed — never to nothing, because the
+     removed pixels must not be visible as context to stage 2.)
+   - **stage 1.5, coarse-to-fine ladder**: the seed is only ~15-30% of native
+     scale, so `ladder_levels` intermediate scales (×`ladder_ratio`, default
+     1.8, at most 2) re-fill the hole: each level runs the same band-by-band
+     front over the scaled canvas (band = `peel_band` of a window), then its
+     result is upscaled and replaces the unknown pixels only. Protected area
+     is dilated conservatively at coarse scales, so protected content is
+     never model context. This gives the native stage a mid-scale fill with
+     real(ish) structure instead of a blur to extend.
+   - **stage 2, progressive refinement** at native resolution: windows are
+     512×512 (step 384 = 512 − 128 overlap) and each removal pixel is owned by
+     exactly one window (max blend weight per axis). A call masks only pixels
+     within `peel_band` of real or already-refined content and at most
+     `peel_max_unknown` of any window (the band is clipped to the pixels
+     nearest trusted content when needed), and later calls see earlier fills as
+     context. The fill front therefore advances from the removal boundary
+     inward instead of ever asking a window to fill a mostly-empty tile.
    - windows are `float32 [1,3,512,512]` in 0..1 for the ONNX engine.
    - composite: only removal-mask pixels are written (feathered one/two px
      inside the mask edge); protected and unselected pixels are bit-exact.

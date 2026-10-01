@@ -129,6 +129,8 @@ class DiagnosticCapture:
         image_size: tuple[int, int],
         mask: dict,
         context_pass: dict,
+        ladder: list[dict] | None = None,
+        progressive: dict | None = None,
     ) -> None:
         """Write ``metadata.json``; errors are logged, never raised."""
         try:
@@ -142,6 +144,8 @@ class DiagnosticCapture:
                 "crop": {"y0": y0, "y1": y1, "x0": x0, "x1": x1},
                 "mask": mask,
                 "context_pass": context_pass,
+                "ladder": ladder,
+                "progressive_fill": progressive,
                 "images_written": list(self._images),
                 "png_note": PNG_NOTE,
             }
