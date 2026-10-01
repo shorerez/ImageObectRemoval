@@ -441,3 +441,41 @@ def test_quality_ini_overrides(monkeypatch, tmp_path):
 def test_quality_defaults_without_ini(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "app_data_dir", lambda: tmp_path)
     assert config.quality() == config._QUALITY_DEFAULTS
+
+
+def test_texture_grain_is_luminance_only():
+    """Texture must add grain without inventing chroma: a fill with no chroma
+    structure, surrounded by strongly colored texture variance, keeps its
+    chroma; only the luminance band energy rises to match the scene."""
+    from object_remover.inpaint import _synth_texture
+
+    size = 400
+    rng = np.random.default_rng(3)
+    region = np.full((size, size, 3), 0.5, np.float32)
+    # Colored grain in the surroundings: same luma noise, opposite chroma.
+    luma_noise = rng.standard_normal((size, size)).astype(np.float32) * 0.03
+    region[..., 0] += luma_noise + 0.06 * rng.standard_normal((size, size))
+    region[..., 1] += luma_noise
+    region[..., 2] += luma_noise - 0.06 * rng.standard_normal((size, size))
+    region = np.clip(region, 0, 1)
+
+    reg_rem = np.zeros((size, size), bool)
+    reg_rem[150:250, 150:250] = True
+    fill = region.copy()
+    fill[reg_rem] = 0.5  # perfectly smooth, neutral fill
+
+    out = _synth_texture(fill.copy(), region, reg_rem, 96.0, 4.0, 1.0)
+
+    def chroma(img):
+        a = cv2.cvtColor(img, cv2.COLOR_RGB2Lab).astype(np.float32)
+        return a[reg_rem][:, 1:]
+
+    before, after = chroma(fill).std(), chroma(out).std()
+    # Chroma must stay (near) untouched: the ring's chroma std is ~0.06.
+    assert after < 0.02, f"chroma grew from {before:.4f} to {after:.4f}"
+    luma_in = float((out - cv2.GaussianBlur(out, (0, 0), 4.0))[reg_rem].mean(axis=-1).std())
+    luma_ref = float(
+        (region - cv2.GaussianBlur(region, (0, 0), 4.0))[~reg_rem].mean(axis=-1).std()
+    )
+    assert luma_ref > 1e-4
+    assert luma_in > 0.3 * luma_ref, f"luma grain {luma_in:.5f} vs ring {luma_ref:.5f}"

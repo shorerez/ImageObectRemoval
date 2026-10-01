@@ -537,7 +537,15 @@ def _harmonize_fill(fill, region, reg_rem, strength, band):
 def _synth_texture(fill, region, reg_rem, radius, sigma, strength):
     """Add scene-matched grain to the fill: high-frequency noise whose band
     energies match the real texture around the hole, so the fill keeps the
-    scene's grain instead of looking blurred and pasted."""
+    scene's grain instead of looking blurred and pasted.
+
+    The grain is luminance-only: one signal, added to all three channels.
+    Real surroundings often carry much more chroma variance than a smooth
+    fill (colored stone grain, foliage), and matching it per channel poured
+    that variance into the fill as independent colored noise, which reads as
+    confetti-like speckle on textured stone. Luminance grain restores the
+    missing detail without inventing chroma the fill never had.
+    """
     if strength <= 0 or sigma <= 0:
         return fill
     u8 = reg_rem.astype(np.uint8)
@@ -545,23 +553,23 @@ def _synth_texture(fill, region, reg_rem, radius, sigma, strength):
     if int(ring.sum()) < 100:
         return fill
     sig = float(sigma)
-    r_fine = region - cv2.GaussianBlur(region, (0, 0), sig)
-    r_blur = cv2.GaussianBlur(region, (0, 0), sig)
+    lum = cv2.cvtColor(region, cv2.COLOR_RGB2GRAY)
+    r_fine = lum - cv2.GaussianBlur(lum, (0, 0), sig)
+    r_blur = cv2.GaussianBlur(lum, (0, 0), sig)
     r_coarse = r_blur - cv2.GaussianBlur(r_blur, (0, 0), 2.0 * sig)
     rng = np.random.default_rng(12345)  # deterministic output
-    noise = rng.standard_normal(region.shape).astype(np.float32)
+    noise = rng.standard_normal(region.shape[:2]).astype(np.float32)
     n_fine = noise - cv2.GaussianBlur(noise, (0, 0), sig)
     n_blur = cv2.GaussianBlur(noise, (0, 0), sig)
     n_coarse = n_blur - cv2.GaussianBlur(n_blur, (0, 0), 2.0 * sig)
-    grain = np.zeros_like(fill)
-    for c in range(3):
-        for src, ref in ((n_fine, r_fine), (n_coarse, r_coarse)):
-            target = float(ref[..., c][ring].std())
-            have = float(src[..., c].std())
-            if target > 1e-5 and have > 1e-5:
-                grain[..., c] += src[..., c] * (target / have)
+    grain = np.zeros(region.shape[:2], dtype=np.float32)
+    for src, ref in ((n_fine, r_fine), (n_coarse, r_coarse)):
+        target = float(ref[ring].std())
+        have = float(src.std())
+        if target > 1e-5 and have > 1e-5:
+            grain += src * (target / have)
     out = fill.copy()
-    out[reg_rem] = fill[reg_rem] + strength * grain[reg_rem]
+    out[reg_rem] = fill[reg_rem] + strength * grain[reg_rem][..., None]
     return out
 
 
