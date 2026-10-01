@@ -1,0 +1,699 @@
+{
+  "app_version": "0.1.0",
+  "context_pass": {
+    "downscale": 0.16972375690607736,
+    "ran": true,
+    "reason": "hole exceeds native-window trigger",
+    "scaled_size": {
+      "height": 467,
+      "width": 404
+    },
+    "seed_crop": {
+      "x0": 3081,
+      "x1": 5464,
+      "y0": 3575,
+      "y1": 6326
+    },
+    "seeder": "ai-whole-hole"
+  },
+  "created_utc": "2026-10-01T15:27:59Z",
+  "crop": {
+    "x0": 3462,
+    "x1": 5464,
+    "y0": 3956,
+    "y1": 5945
+  },
+  "engine": {
+    "input_size": 512,
+    "name": "LaMa (AI)"
+  },
+  "image": {
+    "height": 8192,
+    "width": 5464
+  },
+  "images_written": [
+    "00-original.png",
+    "mask.png",
+    "02-context.png",
+    "02b-ladder-31.png",
+    "02b-ladder-55.png",
+    "01-native.png",
+    "04-final.png"
+  ],
+  "ladder": [
+    {
+      "calls": 7,
+      "canvas": [
+        612,
+        608
+      ],
+      "forced_calls": 0,
+      "max_hole_share_used": 0.1558,
+      "scale": 0.3055
+    },
+    {
+      "calls": 20,
+      "canvas": [
+        1101,
+        1094
+      ],
+      "forced_calls": 0,
+      "max_hole_share_used": 0.2019,
+      "scale": 0.5499
+    }
+  ],
+  "mask": {
+    "protect_pixels_in_crop": 0,
+    "removal_pixels_in_crop": 2456058
+  },
+  "png_note": "Diagnostic images are 8-bit PNGs and may not preserve the ICC/color-management appearance of the original. All files are written locally only; nothing is uploaded.",
+  "progressive_fill": {
+    "band_px": 102,
+    "call_log": [
+      {
+        "forced": false,
+        "pixels": 50270,
+        "window": [
+          1490,
+          0
+        ],
+        "window_hole_share": 0.1918,
+        "window_unrefined_share": 0.4558
+      },
+      {
+        "forced": false,
+        "pixels": 47366,
+        "window": [
+          1152,
+          0
+        ],
+        "window_hole_share": 0.1807,
+        "window_unrefined_share": 0.4566
+      },
+      {
+        "forced": false,
+        "pixels": 48609,
+        "window": [
+          768,
+          0
+        ],
+        "window_hole_share": 0.1854,
+        "window_unrefined_share": 0.5449
+      },
+      {
+        "forced": false,
+        "pixels": 51595,
+        "window": [
+          384,
+          0
+        ],
+        "window_hole_share": 0.1968,
+        "window_unrefined_share": 0.4738
+      },
+      {
+        "forced": false,
+        "pixels": 44018,
+        "window": [
+          1490,
+          1477
+        ],
+        "window_hole_share": 0.1679,
+        "window_unrefined_share": 0.5223
+      },
+      {
+        "forced": false,
+        "pixels": 45057,
+        "window": [
+          1152,
+          1477
+        ],
+        "window_hole_share": 0.1719,
+        "window_unrefined_share": 0.563
+      },
+      {
+        "forced": false,
+        "pixels": 47977,
+        "window": [
+          768,
+          1477
+        ],
+        "window_hole_share": 0.183,
+        "window_unrefined_share": 0.4904
+      },
+      {
+        "forced": false,
+        "pixels": 42185,
+        "window": [
+          384,
+          1152
+        ],
+        "window_hole_share": 0.1609,
+        "window_unrefined_share": 0.7571
+      },
+      {
+        "forced": false,
+        "pixels": 44878,
+        "window": [
+          384,
+          1152
+        ],
+        "window_hole_share": 0.1712,
+        "window_unrefined_share": 0.5962
+      },
+      {
+        "forced": false,
+        "pixels": 45873,
+        "window": [
+          768,
+          1152
+        ],
+        "window_hole_share": 0.175,
+        "window_unrefined_share": 0.89
+      },
+      {
+        "forced": false,
+        "pixels": 57739,
+        "window": [
+          768,
+          1152
+        ],
+        "window_hole_share": 0.2203,
+        "window_unrefined_share": 0.715
+      },
+      {
+        "forced": false,
+        "pixels": 45524,
+        "window": [
+          0,
+          768
+        ],
+        "window_hole_share": 0.1737,
+        "window_unrefined_share": 0.5906
+      },
+      {
+        "forced": false,
+        "pixels": 47764,
+        "window": [
+          0,
+          384
+        ],
+        "window_hole_share": 0.1822,
+        "window_unrefined_share": 0.3847
+      },
+      {
+        "forced": false,
+        "pixels": 45182,
+        "window": [
+          0,
+          768
+        ],
+        "window_hole_share": 0.1724,
+        "window_unrefined_share": 0.3698
+      },
+      {
+        "forced": false,
+        "pixels": 55870,
+        "window": [
+          384,
+          768
+        ],
+        "window_hole_share": 0.2131,
+        "window_unrefined_share": 0.8815
+      },
+      {
+        "forced": false,
+        "pixels": 54352,
+        "window": [
+          384,
+          768
+        ],
+        "window_hole_share": 0.2073,
+        "window_unrefined_share": 0.6684
+      },
+      {
+        "forced": false,
+        "pixels": 61024,
+        "window": [
+          384,
+          384
+        ],
+        "window_hole_share": 0.2328,
+        "window_unrefined_share": 0.8591
+      },
+      {
+        "forced": false,
+        "pixels": 72919,
+        "window": [
+          384,
+          384
+        ],
+        "window_hole_share": 0.2782,
+        "window_unrefined_share": 0.6263
+      },
+      {
+        "forced": false,
+        "pixels": 52606,
+        "window": [
+          768,
+          384
+        ],
+        "window_hole_share": 0.2007,
+        "window_unrefined_share": 0.908
+      },
+      {
+        "forced": false,
+        "pixels": 59861,
+        "window": [
+          768,
+          384
+        ],
+        "window_hole_share": 0.2284,
+        "window_unrefined_share": 0.7073
+      },
+      {
+        "forced": false,
+        "pixels": 69347,
+        "window": [
+          768,
+          768
+        ],
+        "window_hole_share": 0.2645,
+        "window_unrefined_share": 0.8442
+      },
+      {
+        "forced": false,
+        "pixels": 61459,
+        "window": [
+          768,
+          768
+        ],
+        "window_hole_share": 0.2344,
+        "window_unrefined_share": 0.5797
+      },
+      {
+        "forced": false,
+        "pixels": 54268,
+        "window": [
+          1152,
+          384
+        ],
+        "window_hole_share": 0.207,
+        "window_unrefined_share": 0.883
+      },
+      {
+        "forced": false,
+        "pixels": 54363,
+        "window": [
+          1152,
+          384
+        ],
+        "window_hole_share": 0.2074,
+        "window_unrefined_share": 0.676
+      },
+      {
+        "forced": false,
+        "pixels": 51479,
+        "window": [
+          1490,
+          384
+        ],
+        "window_hole_share": 0.1964,
+        "window_unrefined_share": 0.8558
+      },
+      {
+        "forced": false,
+        "pixels": 60165,
+        "window": [
+          1490,
+          384
+        ],
+        "window_hole_share": 0.2295,
+        "window_unrefined_share": 0.6595
+      },
+      {
+        "forced": false,
+        "pixels": 55025,
+        "window": [
+          1152,
+          768
+        ],
+        "window_hole_share": 0.2099,
+        "window_unrefined_share": 0.8819
+      },
+      {
+        "forced": false,
+        "pixels": 51744,
+        "window": [
+          1152,
+          1152
+        ],
+        "window_hole_share": 0.1974,
+        "window_unrefined_share": 0.8767
+      },
+      {
+        "forced": false,
+        "pixels": 58154,
+        "window": [
+          1152,
+          768
+        ],
+        "window_hole_share": 0.2218,
+        "window_unrefined_share": 0.6278
+      },
+      {
+        "forced": false,
+        "pixels": 64618,
+        "window": [
+          1152,
+          1152
+        ],
+        "window_hole_share": 0.2465,
+        "window_unrefined_share": 0.6296
+      },
+      {
+        "forced": false,
+        "pixels": 58322,
+        "window": [
+          1490,
+          1152
+        ],
+        "window_hole_share": 0.2225,
+        "window_unrefined_share": 0.8236
+      },
+      {
+        "forced": false,
+        "pixels": 57462,
+        "window": [
+          1490,
+          1152
+        ],
+        "window_hole_share": 0.2192,
+        "window_unrefined_share": 0.6011
+      },
+      {
+        "forced": false,
+        "pixels": 66811,
+        "window": [
+          1490,
+          768
+        ],
+        "window_hole_share": 0.2549,
+        "window_unrefined_share": 0.8253
+      },
+      {
+        "forced": false,
+        "pixels": 61388,
+        "window": [
+          1490,
+          768
+        ],
+        "window_hole_share": 0.2342,
+        "window_unrefined_share": 0.5704
+      },
+      {
+        "forced": false,
+        "pixels": 49643,
+        "window": [
+          1490,
+          384
+        ],
+        "window_hole_share": 0.1894,
+        "window_unrefined_share": 0.325
+      },
+      {
+        "forced": false,
+        "pixels": 39816,
+        "window": [
+          768,
+          0
+        ],
+        "window_hole_share": 0.1519,
+        "window_unrefined_share": 0.1867
+      },
+      {
+        "forced": false,
+        "pixels": 38016,
+        "window": [
+          0,
+          1152
+        ],
+        "window_hole_share": 0.145,
+        "window_unrefined_share": 0.1525
+      },
+      {
+        "forced": false,
+        "pixels": 37365,
+        "window": [
+          384,
+          768
+        ],
+        "window_hole_share": 0.1425,
+        "window_unrefined_share": 0.2425
+      },
+      {
+        "forced": false,
+        "pixels": 35100,
+        "window": [
+          768,
+          384
+        ],
+        "window_hole_share": 0.1339,
+        "window_unrefined_share": 0.1875
+      },
+      {
+        "forced": false,
+        "pixels": 34629,
+        "window": [
+          1490,
+          1152
+        ],
+        "window_hole_share": 0.1321,
+        "window_unrefined_share": 0.2828
+      },
+      {
+        "forced": false,
+        "pixels": 34025,
+        "window": [
+          1490,
+          768
+        ],
+        "window_hole_share": 0.1298,
+        "window_unrefined_share": 0.2137
+      },
+      {
+        "forced": false,
+        "pixels": 32477,
+        "window": [
+          768,
+          1152
+        ],
+        "window_hole_share": 0.1239,
+        "window_unrefined_share": 0.288
+      },
+      {
+        "forced": false,
+        "pixels": 32012,
+        "window": [
+          1152,
+          1477
+        ],
+        "window_hole_share": 0.1221,
+        "window_unrefined_share": 0.1612
+      },
+      {
+        "forced": false,
+        "pixels": 30122,
+        "window": [
+          1152,
+          384
+        ],
+        "window_hole_share": 0.1149,
+        "window_unrefined_share": 0.1894
+      },
+      {
+        "forced": false,
+        "pixels": 29801,
+        "window": [
+          384,
+          1152
+        ],
+        "window_hole_share": 0.1137,
+        "window_unrefined_share": 0.1576
+      },
+      {
+        "forced": false,
+        "pixels": 27034,
+        "window": [
+          384,
+          0
+        ],
+        "window_hole_share": 0.1031,
+        "window_unrefined_share": 0.1154
+      },
+      {
+        "forced": false,
+        "pixels": 25533,
+        "window": [
+          1152,
+          768
+        ],
+        "window_hole_share": 0.0974,
+        "window_unrefined_share": 0.1446
+      },
+      {
+        "forced": false,
+        "pixels": 24989,
+        "window": [
+          1490,
+          1477
+        ],
+        "window_hole_share": 0.0953,
+        "window_unrefined_share": 0.0953
+      },
+      {
+        "forced": false,
+        "pixels": 24100,
+        "window": [
+          1152,
+          0
+        ],
+        "window_hole_share": 0.0919,
+        "window_unrefined_share": 0.1011
+      },
+      {
+        "forced": false,
+        "pixels": 19587,
+        "window": [
+          768,
+          1477
+        ],
+        "window_hole_share": 0.0747,
+        "window_unrefined_share": 0.1012
+      },
+      {
+        "forced": false,
+        "pixels": 19045,
+        "window": [
+          1490,
+          0
+        ],
+        "window_hole_share": 0.0727,
+        "window_unrefined_share": 0.0727
+      },
+      {
+        "forced": false,
+        "pixels": 16579,
+        "window": [
+          768,
+          768
+        ],
+        "window_hole_share": 0.0632,
+        "window_unrefined_share": 0.0632
+      },
+      {
+        "forced": false,
+        "pixels": 13787,
+        "window": [
+          384,
+          384
+        ],
+        "window_hole_share": 0.0526,
+        "window_unrefined_share": 0.1101
+      },
+      {
+        "forced": false,
+        "pixels": 13516,
+        "window": [
+          0,
+          384
+        ],
+        "window_hole_share": 0.0516,
+        "window_unrefined_share": 0.0626
+      },
+      {
+        "forced": false,
+        "pixels": 11657,
+        "window": [
+          1152,
+          1152
+        ],
+        "window_hole_share": 0.0445,
+        "window_unrefined_share": 0.0445
+      },
+      {
+        "forced": false,
+        "pixels": 10814,
+        "window": [
+          384,
+          1477
+        ],
+        "window_hole_share": 0.0413,
+        "window_unrefined_share": 0.0413
+      },
+      {
+        "forced": false,
+        "pixels": 5407,
+        "window": [
+          0,
+          768
+        ],
+        "window_hole_share": 0.0206,
+        "window_unrefined_share": 0.0206
+      },
+      {
+        "forced": false,
+        "pixels": 3223,
+        "window": [
+          0,
+          0
+        ],
+        "window_hole_share": 0.0123,
+        "window_unrefined_share": 0.0123
+      },
+      {
+        "forced": false,
+        "pixels": 1706,
+        "window": [
+          1490,
+          384
+        ],
+        "window_hole_share": 0.0065,
+        "window_unrefined_share": 0.0065
+      },
+      {
+        "forced": false,
+        "pixels": 801,
+        "window": [
+          1490,
+          768
+        ],
+        "window_hole_share": 0.0031,
+        "window_unrefined_share": 0.0031
+      }
+    ],
+    "calls": 60,
+    "forced_calls": 0,
+    "max_hole_share_used": 0.2782,
+    "max_window_hole_share": 0.5,
+    "windows_overlapping_mask": 24
+  },
+  "quality": {
+    "blend_band": 32.0,
+    "context_margin": 192.0,
+    "feather_sigma": 1.0,
+    "freq_sigma": 8.0,
+    "harmonize": 1.0,
+    "harmonize_band": 24.0,
+    "ladder": 1.0,
+    "ladder_levels": 2.0,
+    "ladder_ratio": 1.8,
+    "multiscale": 1.0,
+    "multiscale_min": 0.125,
+    "multiscale_trigger": 0.6,
+    "peel_band": 0.2,
+    "peel_max_unknown": 0.5,
+    "texture": 0.5,
+    "texture_radius": 96.0,
+    "texture_sigma": 4.0
+  }
+}
