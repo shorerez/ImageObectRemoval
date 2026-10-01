@@ -366,6 +366,46 @@ def test_harmonize_matches_boundary_color():
     assert (out[:350] == pixels[:350]).all()
 
 
+def test_harmonize_does_not_stretch_chroma():
+    """Harmonize may shift the fill's color but must not amplify chroma
+    contrast: the surroundings' chroma variance (foliage, stone) is not
+    something the fill should inherit, or colored blotches appear."""
+    from object_remover.inpaint import _harmonize_fill
+
+    size = 300
+    region = np.zeros((size, size, 3), np.float32)
+    # Strongly colored, high-chroma-variance surroundings (blue/green stripes).
+    ys = np.linspace(0.0, 8.0 * np.pi, size, dtype=np.float32)
+    region[..., 0] = 0.30 + 0.10 * np.sin(ys)[:, None]
+    region[..., 1] = 0.50 + 0.15 * np.sin(ys * 2.0)[:, None]
+    region[..., 2] = 0.55 + 0.20 * np.cos(ys)[:, None]
+
+    reg_rem = np.zeros((size, size), bool)
+    reg_rem[100:200, 100:200] = True
+    # Fill: correct-ish luminance, slightly-off color, and the faint chroma
+    # ripple a real model fill carries (this is what a chroma stretch would
+    # amplify into blotches).
+    fill = region.copy()
+    xs = np.linspace(0.0, 6.0 * np.pi, 100, dtype=np.float32)
+    hole = np.empty((100, 100, 3), np.float32)
+    hole[..., 0] = 0.44 + 0.006 * np.sin(xs)[None, :]
+    hole[..., 1] = 0.48 + 0.008 * np.cos(xs)[:, None]
+    hole[..., 2] = 0.46 + 0.006 * np.sin(2.0 * xs)[None, :]
+    fill[reg_rem] = hole.reshape(-1, 3)
+
+    out = _harmonize_fill(fill.copy(), region, reg_rem, 1.0, 24.0)
+    before = cv2.cvtColor(fill, cv2.COLOR_RGB2Lab)[reg_rem].astype(np.float32)
+    after = cv2.cvtColor(out, cv2.COLOR_RGB2Lab)[reg_rem].astype(np.float32)
+    # Chroma contrast inside the fill is essentially unchanged...
+    for ch in (1, 2):
+        assert after[:, ch].std() <= before[:, ch].std() * 1.25 + 1e-4
+    # ...while the fill's luminance is pulled toward the surroundings.
+    ring = cv2.cvtColor(region, cv2.COLOR_RGB2Lab)[~reg_rem].astype(np.float32)
+    assert abs(after[:, 0].mean() - ring[:, 0].mean()) < abs(
+        before[:, 0].mean() - ring[:, 0].mean()
+    )
+
+
 def test_texture_adds_scene_matched_grain(monkeypatch):
     """A smooth fill on a noisy scene must receive the scene's grain."""
     _quality(monkeypatch, harmonize=0.0)

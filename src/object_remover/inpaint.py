@@ -519,10 +519,16 @@ def _harmonize_fill(fill, region, reg_rem, strength, band):
     dst = lab_f[inner].astype(np.float32)  # fill at its boundary
     src_mean, dst_mean = src.mean(axis=0), dst.mean(axis=0)
     ratio = np.clip(src.std(axis=0) / np.maximum(dst.std(axis=0), 1e-3), 0.5, 2.0)
+    # Contrast is stretched on luminance only. Real surroundings often carry
+    # far more chroma variance than a smooth fill (stone grain, foliage), and
+    # stretching chroma turns that mismatch into visible colored blotches,
+    # especially on textured stone; the chroma mean shift below still fixes the
+    # fill's color cast.
+    stretch = np.array([1.0 + (ratio[0] - 1.0) * strength, 1.0, 1.0])
     centered = lab_f[reg_rem] - dst_mean
     lab_f[reg_rem] = (
         dst_mean
-        + centered * (1.0 + (ratio - 1.0) * strength)
+        + centered * stretch
         + (src_mean - dst_mean) * strength
     )
     return np.clip(cv2.cvtColor(lab_f, cv2.COLOR_Lab2RGB), 0.0, 1.0)
