@@ -159,20 +159,27 @@ def test_whole_hole_seed_captured_when_it_runs(app_dir):
     crop = meta["crop"]
     assert cp["scaled_size"]["width"] < crop["x1"] - crop["x0"]
     assert cp["scaled_size"]["height"] < crop["y1"] - crop["y0"]
-    # the seed writes plausible content everywhere, then native windows refine
+    # the seed writes plausible content everywhere, the ladder rebuilds it at
+    # intermediate scales, then native windows refine it
     prog = meta["progressive_fill"]
     assert prog["calls"] > 1
-    assert prog["band_px"] == 307  # peel_band * 512
+    assert prog["band_px"] == int(round(config._QUALITY_DEFAULTS["peel_band"] * 512))
     assert all(
         c["window_hole_share"] <= prog["max_window_hole_share"] for c in prog["call_log"]
     )
-    assert sorted(meta["images_written"]) == sorted([
+    ladder = meta["ladder"]
+    assert ladder and len(ladder) <= int(config._QUALITY_DEFAULTS["ladder_levels"])
+    assert [lv["scale"] for lv in ladder] == sorted(lv["scale"] for lv in ladder)
+    assert all(0.0 < lv["scale"] < 1.0 and lv["calls"] > 0 for lv in ladder)
+    expected = {
         "00-original.png",
         "mask.png",
         "01-native.png",
         "02-context.png",
         "04-final.png",
-    ])
+    } | {f"02b-ladder-{int(round(lv['scale'] * 100)):02d}.png" for lv in ladder}
+    assert sorted(meta["images_written"]) == sorted(expected)
+    assert all((runs[0] / name).is_file() for name in expected)
 
 
 # --- isolation: diagnostics never affect the removal ------------------------

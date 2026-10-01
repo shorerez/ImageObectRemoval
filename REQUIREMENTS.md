@@ -81,7 +81,8 @@ holes from surrounding context with an AI inpainting model.
 3. **Fixed-shape model tiling with progressive refinement.** The LaMa ONNX
    export is fixed at 512×512, so a hole larger than one conditioned window is
    first *seeded* in one shot at a downscaled canvas (plausible content, no
-   detail), then refined at native resolution band by band: each call masks
+   detail), then rebuilt at intermediate scales (the coarse-to-fine ladder),
+   and finally refined at native resolution band by band: each call masks
    only what lies within one peel band of real or already-filled content and at
    most a fixed share of its window, so a window is never asked to invent a
    mostly-empty tile (the earlier single native pass degraded to tile-sized

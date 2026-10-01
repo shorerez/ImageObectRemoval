@@ -1,12 +1,20 @@
-"""Tests for the quality pipeline: crop planning, whole-hole seed, progressive
-native refinement, color harmonization, texture, quality.ini overrides."""
+"""Tests for the quality pipeline: crop planning, whole-hole seed, the
+coarse-to-fine ladder, progressive native refinement, color harmonization,
+texture, quality.ini overrides."""
 from __future__ import annotations
 
 import cv2
 import numpy as np
 
 from object_remover import config, inpaint as mod
-from object_remover.inpaint import InpaintService, _context_scale, _plan_region
+from object_remover.inpaint import (
+    InpaintService,
+    _context_scale,
+    _ladder_scales,
+    _plan_region,
+)
+
+_ORIG_PROGRESSIVE_FILL = mod._progressive_fill
 
 
 class DummyEngine:
@@ -74,6 +82,16 @@ def test_context_scale_bounds():
     s = _context_scale(700, 600, 512, 0.6, 0.125)
     assert 0.4 < s < 0.45
     assert _context_scale(20000, 20000, 512, 0.6, 0.125) == 0.125
+
+
+def test_ladder_scales_climb_towards_native():
+    assert _ladder_scales(1.0, 1.8, 2) == []
+    assert _ladder_scales(0.3413, 1.8, 2) == [0.61434]
+    scales = _ladder_scales(0.13, 1.8, 2)
+    assert len(scales) == 2
+    assert 0.13 < scales[0] < scales[1] < 0.95
+    assert abs(scales[1] - scales[0] * 1.8) < 1e-9
+    assert _ladder_scales(0.6, 1.8, 1) == []  # 1.08 >= 0.95: no extra level
 
 
 def _big_hole_case():
@@ -145,56 +163,136 @@ def test_no_window_is_asked_to_fill_a_mostly_empty_tile(monkeypatch):
 
 
 class MarkerEngine:
-    """Fills every window with its own call number (1/255 per call)."""
+    """Fills every window with its own call number (1/255 per call) and keeps
+    a cheap per-call record: masked share and how much of the visible tile is
+    still the blurry whole-hole seed (marker of call 1)."""
 
     name = "marker"
     input_size = 512
 
     def __init__(self):
         self.n = 0
+        self.stats = []  # index, mask_share, seed_share
 
     def fill(self, tile, mask):
         self.n += 1
+        seed_share = float(
+            ((np.abs(tile[..., 0] - 1.0 / 255.0) < 1e-6) & (mask < 0.5)).mean()
+        )
+        self.stats.append((self.n, float(mask.mean()), seed_share))
         return np.full_like(tile, self.n / 255.0)
 
 
 def _marked_run(monkeypatch, **over):
-    """Run the big-hole case and return (call index map, pixels, removal)."""
+    """Run the big-hole case; returns a dict with the quality dict, the call
+    index map, the pixels/mask, the engine (with per-call conditioning) and
+    the call range of every progressive stage (spied)."""
     q = _quality(monkeypatch, harmonize=0.0, texture=0.0, **over)
-    svc = InpaintService(MarkerEngine())
+    engine = MarkerEngine()
+    stages: list[dict] = []
+
+    def spy(eng, fill, reg_rem, prot, qq, cancel, progress, total, done):
+        first = len(eng.stats)
+        result = _ORIG_PROGRESSIVE_FILL(
+            eng, fill, reg_rem, prot, qq, cancel, progress, total, done
+        )
+        stages.append(
+            {"canvas": fill.shape[:2], "first": first, "calls": len(eng.stats) - first}
+        )
+        return result
+
+    monkeypatch.setattr(mod, "_progressive_fill", spy)
+    svc = InpaintService(engine)
     pixels, removal = _big_hole_case()
     out, _stats = svc.inpaint(pixels, removal, None)
     idx = np.rint(out[..., 0].astype(np.float32) / 65535.0 * 255.0).astype(int)
-    return q, idx, pixels, removal
+    return {
+        "q": q, "idx": idx, "pixels": pixels, "removal": removal,
+        "engine": engine, "stages": stages,
+    }
 
 
-def test_first_refinement_windows_stay_near_the_real_boundary(monkeypatch):
-    """The first native windows may only mask pixels within one peel band of
-    real image content — that is what keeps structure continuation possible."""
-    q, idx, _pixels, removal = _marked_run(monkeypatch)
-    hole = removal > 0
+def test_first_native_windows_stay_near_the_real_boundary(monkeypatch):
+    """The first windows of the native stage may only mask pixels within one
+    peel band of real image content — that is what keeps structure
+    continuation possible."""
+    run = _marked_run(monkeypatch)
+    native = run["stages"][-1]  # native scale is always the last stage
+    hole = run["removal"] > 0
     dist = cv2.distanceTransform(hole.astype(np.uint8), cv2.DIST_L2, 5)
-    band = q["peel_band"] * 512
-    first_round = hole & (idx == 2)  # call 1 is the downscaled seed window
+    band = run["q"]["peel_band"] * 512
+    first_round = hole & (run["idx"] == native["first"] + 1)  # marker is 1-based
     assert first_round.any()
     assert int(dist[first_round].max()) <= band + 1.5
+
+
+def test_ladder_rebuilds_the_hole_before_native_scale(monkeypatch):
+    """Between the whole-hole seed and native scale the fill is rebuilt at
+    intermediate scales (coarse to fine), so the native stage stands on
+    structure rather than on the blurry seed."""
+    run = _marked_run(monkeypatch)
+    stages = run["stages"]
+    assert len(stages) > 1  # seed, ladder level(s), native
+    native_h, native_w = stages[-1]["canvas"]
+    ladder = stages[:-1]
+    for stage in ladder:
+        h, w = stage["canvas"]
+        assert 0 < h < native_h and 0 < w < native_w  # finer than native
+        assert stage["calls"] > 0
+    # scales ascend by ladder_ratio and stay below native
+    scales = [h / native_h for h, _w in (s["canvas"] for s in ladder)]
+    assert scales == sorted(scales)
+    assert len(scales) <= int(run["q"]["ladder_levels"])
+    ratio = run["q"]["ladder_ratio"]
+    for a, b in zip(scales, scales[1:]):
+        assert abs(b - a * ratio) < 1e-3
+
+
+def test_ladder_disabled_jumps_straight_to_native(monkeypatch):
+    run = _marked_run(monkeypatch, ladder=0.0)
+    assert len(run["stages"]) == 1
+
+
+def test_native_stage_never_sees_only_the_blurry_seed(monkeypatch):
+    """With the ladder enabled the first native call must already stand on
+    refined (mid-scale) content, not on the 20-30% whole-hole seed: that is
+    the difference between extending structure and extending a blur."""
+    run = _marked_run(monkeypatch)
+    first_native = run["engine"].stats[run["stages"][-1]["first"]]
+    mask_share, seed_share = first_native[1], first_native[2]
+    assert mask_share <= run["q"]["peel_max_unknown"] + 1e-6
+    assert seed_share < 0.05  # the visible tile is refined content, not seed
+
+
+def test_without_the_ladder_the_native_stage_stands_on_the_seed(monkeypatch):
+    """Control for the previous test: with ladder=0 the very first native
+    window is mostly the blurry whole-hole seed. The ladder is what removes
+    that conditioning; this is measured, not assumed."""
+    run = _marked_run(monkeypatch, ladder=0.0)
+    native_first = run["stages"][0]["first"]
+    seed_share = run["engine"].stats[native_first][2]
+    assert seed_share > 0.2
 
 
 def test_large_hole_is_refined_over_several_rounds(monkeypatch):
     """A hole far deeper than the peel band cannot be closed by one round: the
     pixels in its middle are only reachable once the front of trusted content
     has advanced, so they carry a later call number."""
-    _q, idx, _pixels, removal = _marked_run(monkeypatch)
+    run = _marked_run(monkeypatch)
+    idx, removal = run["idx"], run["removal"]
+    native_first = run["stages"][-1]["first"] + 1  # 1-based marker of call 1
     hole = removal > 0
+    band = int(run["q"]["peel_band"] * 512)
     dist = cv2.distanceTransform(hole.astype(np.uint8), cv2.DIST_L2, 5)
-    core = hole & (dist > 380)  # deeper than the 307 px band
+    core = hole & (dist > band + 64)  # deeper than one peel band
     assert core.any()
-    assert (idx[core] > 1).all()          # never reachable in the first round
-    assert idx[core].min() > idx[hole].min()
-    # every hole pixel was rewritten by the progressive stage (call 1 is the
-    # seed): no pixel may be left behind because no window claimed it
+    assert (idx[core] >= native_first).all()  # never in the first native round
+    assert idx[core].min() > idx[hole & (idx >= native_first)].min()
+    # every hole pixel was rewritten by the native stage (the ladder left the
+    # coarse fill there): no pixel may be left behind because no window
+    # claimed it
     interior = hole & (dist >= 4)  # the 1 px seam feather blends at the rim
-    assert (idx[interior] >= 2).all()
+    assert (idx[interior] >= native_first).all()
     assert set(np.unique(idx[hole])) <= set(range(1, 300))
 
 

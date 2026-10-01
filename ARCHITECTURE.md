@@ -46,6 +46,14 @@ UI never blocks and every job is cancellable.
      pixels are seeded, so real pixels stay bit-exact. (`multiscale=0` falls
      back to a cheap classical Telea seed — never to nothing, because the
      removed pixels must not be visible as context to stage 2.)
+   - **stage 1.5, coarse-to-fine ladder**: the seed is only ~15-30% of native
+     scale, so `ladder_levels` intermediate scales (×`ladder_ratio`, default
+     1.8, at most 2) re-fill the hole: each level runs the same band-by-band
+     front over the scaled canvas (band = `peel_band` of a window), then its
+     result is upscaled and replaces the unknown pixels only. Protected area
+     is dilated conservatively at coarse scales, so protected content is
+     never model context. This gives the native stage a mid-scale fill with
+     real(ish) structure instead of a blur to extend.
    - **stage 2, progressive refinement** at native resolution: windows are
      512×512 (step 384 = 512 − 128 overlap) and each removal pixel is owned by
      exactly one window (max blend weight per axis). A call masks only pixels

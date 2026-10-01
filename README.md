@@ -65,12 +65,15 @@ iscc packaging\installer.iss
 ## Notes
 
 - Inference always runs at native resolution (LaMa ONNX fixed 512×512 input),
-  in two stages: a *whole-hole seed* fills big selections in one shot at a
-  downscaled canvas (plausible content, no structure), then the removal area
-  is **progressively refined** — band by band, from the real boundary inward,
-  so every 512×512 window has real or already-refined content around the area
-  it completes. No window is ever asked to invent a mostly-empty tile, and no
-  detail is lost on huge images.
+  in three stages: a *whole-hole seed* fills big selections in one shot at a
+  downscaled canvas (plausible content, no structure), a **coarse-to-fine
+  ladder** rebuilds that fill at intermediate scales (each level re-fills the
+  hole band by band with the previous level as context, so coarse structure
+  is sharpened against real surroundings), and finally the removal area is
+  **progressively refined** at native resolution — band by band, from the real
+  boundary inward, so every 512×512 window has real or already-refined content
+  around the area it completes. No window is ever asked to invent a
+  mostly-empty tile, and no detail is lost on huge images.
 - Protected pixels are never overwritten and never used as fill source.
 - Export never modifies the source image.
 
@@ -83,10 +86,12 @@ While that marker exists, every removal writes a uniquely named folder under
 `%LOCALAPPDATA%\ObjectRemover\diagnostics\` containing `00-original.png`
 (cropped region), `mask.png` (effective removal mask), `01-native.png` (the
 native-resolution reconstruction before color/texture corrections),
-`02-context.png` (only when the whole-hole seed ran) and `04-final.png`
+`02-context.png` (only when the whole-hole seed ran), `02b-ladder-NN.png` per
+intermediate ladder level (NN = scale in percent) and `04-final.png`
 (the composited result). `metadata.json` records the engine, the effective
-quality settings, the crop coordinates, the seed pass, and — for the
-progressive refinement — the window size, the masked-share cap, and a log of
+quality settings, the crop coordinates, the seed pass, the ladder levels
+(scale, canvas, calls, masked-share cap usage), and — for the progressive
+refinement — the window size, the masked-share cap, and a log of
 every window that was filled (`call_log`: window position, pixels written,
 share of the window that was masked, share that was still seed content).
 

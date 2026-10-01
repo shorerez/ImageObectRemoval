@@ -3,14 +3,21 @@
 The service is engine-agnostic and works at native resolution with the fixed
 MODEL_INPUT_SIZE (512) window of the LaMa ONNX export. A crop around the
 removal bbox carries a CONTEXT_MARGIN ring of real image context, and the hole
-is filled in two stages:
+is filled in three stages:
 
 1. **Whole-hole seed** — when the hole is larger than the multiscale trigger
    the crop is downscaled until the hole fits inside one window with real
    surroundings, filled in one shot, and upscaled. This seed has no structure
    detail, but it is plausible content everywhere, so the native stage never
    sees the removed object as context.
-2. **Progressive native refinement** — the removal region is then re-filled at
+2. **Coarse-to-fine ladder** — the seed is only ~15-30% of native scale and
+   its structure is too soft to be worth extending, so between the seed and
+   native scale the fill is rebuilt at intermediate scales (×1.8 per level,
+   at most `ladder_levels`). Each level sees the previous level's fill as
+   context and re-fills the hole band by band from the real boundary inward,
+   which sharpens the coarse structure (step lines, water swell) against
+   context that finally has some detail in it.
+3. **Progressive native refinement** — the removal region is re-filled at
    native resolution band by band, from the real boundary inward. Each pass
    masks only the pixels within `peel_band` of content the model can trust
    (real pixels, or already-refined ones), so no window is ever asked to fill
@@ -18,7 +25,9 @@ is filled in two stages:
    into a mosaic of flat tile-sized patches. Every pixel is written exactly
    once, by the window whose territory it belongs to, and later windows see
    earlier fills as context, so structure (e.g. step edges) is extended from
-   the surroundings step by step.
+   the surroundings step by step. The band is deliberately thin (20% of a
+   window): the first window of a pass is then anchored on real pixels, not
+   on a coarse guess, which is what lets real structure propagate inward.
 
 Runtime tuning lives in quality.ini (see config.quality).
 
@@ -194,6 +203,33 @@ def _context_scale(hole_h, hole_w, size, trigger, floor):
     if long_side <= target:
         return 1.0
     return max(floor, target / long_side)
+
+
+def _ladder_scales(seed_scale: float, ratio: float, max_levels: int) -> list[float]:
+    """Intermediate scales between the whole-hole seed and native (1.0).
+
+    Each level multiplies the scale by `ratio` (at most `max_levels` of them)
+    and stops before native scale, which the progressive stage always runs at
+    full resolution. Returns ascending scales, possibly empty.
+    """
+    scales: list[float] = []
+    scale = float(seed_scale)
+    for _ in range(max(0, int(max_levels))):
+        scale *= max(1.05, float(ratio))
+        if scale >= 0.95:
+            break
+        scales.append(scale)
+    return scales
+
+
+def _resize_mask(mask: np.ndarray, w: int, h: int, scale: float) -> np.ndarray:
+    """Bool mask resized for a ladder level (True = part of the hole)."""
+    small = cv2.resize(
+        mask.astype(np.float32),
+        (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+    return small > 0.5
 
 
 def _window_starts(total: int, size: int, step: int) -> list[int]:
@@ -636,16 +672,35 @@ class InpaintService:
                 "reason": "disabled in quality settings",
             }
 
+        # Coarse-to-fine ladder between the seed and native resolution. The
+        # seed is a blurry 15-30% scale guess, so at native scale the model
+        # would see no structure around the hole to extend; rebuilding the
+        # hole at intermediate scales first puts real-ish structure into that
+        # context, which the native stage then sharpens band by band.
+        ladder_levels: list[float] = []
+        if scale < 1.0 and float(q["multiscale"]) > 0 and float(q["ladder"]) > 0:
+            ladder_levels = _ladder_scales(
+                scale, float(q["ladder_ratio"]), int(q["ladder_levels"])
+            )
+
         mask_windows = _count_windows_over_mask(reg_eff, size, step)
         band_px = max(1.0, float(q["peel_band"]) * size)
         # Progress estimate: every window that touches the hole is filled at
         # least once, and a call writes roughly half a band's worth of pixels.
         # `done` is clamped, so a wrong estimate only affects the bar's pace.
-        peel_estimate = max(
-            mask_windows,
-            int(np.ceil(int(reg_rem.sum()) / max(1.0, 0.55 * band_px * size))),
-        )
-        total = seed_planned + peel_estimate
+        def _peel_estimate(hole_px: int) -> int:
+            return max(1, int(np.ceil(hole_px / max(1.0, 0.55 * band_px * size))))
+
+        ladder_estimate = 0
+        for level_scale in ladder_levels:
+            level_hole = int((reg_rem.sum()) * level_scale * level_scale)
+            ladder_estimate += max(
+                _peel_estimate(level_hole),
+                _count_windows_over_mask(
+                    _resize_mask(reg_rem, w, h, level_scale), size, step
+                ),
+            )
+        total = seed_planned + ladder_estimate + _peel_estimate(int(reg_rem.sum()))
         done = 0
         seed_calls = 0
         fill = region.copy()
@@ -673,12 +728,71 @@ class InpaintService:
             if diag is not None:
                 diag.add_image("02-context.png", seed)
 
+        # --- stage 1.5: coarse-to-fine ladder -------------------------------
+        # Each level re-fills the whole hole at a higher scale, band by band
+        # from the boundary inward, with the previous level's fill as context.
+        # Pixels the model trusts are therefore never more than one band away
+        # from real content, and the structure of the coarse fill gets
+        # re-decided (sharper) against real surroundings before native scale
+        # ever runs.
+        ladder_info: list[dict] = []
+        reg_prot = prot[y0:y1, x0:x1]
+        unknown_region = reg_rem | reg_prot
+        for level_scale in ladder_levels:
+            level_w = max(1, int(round(w * level_scale)))
+            level_h = max(1, int(round(h * level_scale)))
+            small = cv2.resize(
+                fill, (level_w, level_h), interpolation=cv2.INTER_AREA
+            )
+            # Protect conservatively (any coarse pixel that overlaps protected
+            # area stays unknown) so protected content is never model context.
+            small_prot = (
+                cv2.resize(
+                    reg_prot.astype(np.float32), (level_w, level_h),
+                    interpolation=cv2.INTER_AREA,
+                )
+                > 0.0
+            )
+            small_rem = _resize_mask(reg_rem, w, h, level_scale)
+            small_fill, done, level_calls, level_forced = _progressive_fill(
+                self.engine, small, small_rem, small_prot, q, cancel,
+                progress, total, done,
+            )
+            upscaled = cv2.resize(
+                small_fill, (w, h), interpolation=cv2.INTER_CUBIC
+            )
+            # Only unknown pixels are replaced: outside the hole the real
+            # pixels of the crop stay exactly as the model saw them.
+            fill[unknown_region] = upscaled[unknown_region]
+            holes = [c["window_hole_share"] for c in level_calls]
+            ladder_info.append(
+                {
+                    "scale": round(float(level_scale), 4),
+                    "canvas": [int(level_w), int(level_h)],
+                    "calls": len(level_calls),
+                    "forced_calls": int(level_forced),
+                    "max_hole_share_used": max(holes) if holes else 0.0,
+                }
+            )
+            if diag is not None:
+                diag.add_image(
+                    f"02b-ladder-{int(round(level_scale * 100)):02d}.png", upscaled
+                )
+            if level_forced:
+                log.warning(
+                    "Ladder fill at %d%%: %d/%d windows had to run with more "
+                    "than %.0f%% masked pixels.",
+                    round(level_scale * 100), level_forced, len(level_calls),
+                    float(q["peel_max_unknown"]) * 100,
+                )
+
         # --- stage 2: progressive native refinement -------------------------
         fill, done, calls, forced = _progressive_fill(
-            self.engine, fill, reg_rem, prot[y0:y1, x0:x1], q, cancel,
+            self.engine, fill, reg_rem, reg_prot, q, cancel,
             progress, total, done,
         )
         _report(progress, total, total)
+        ladder_calls = sum(level["calls"] for level in ladder_info)
         if forced:
             log.warning(
                 "Progressive fill: %d/%d windows had to run with more than "
@@ -739,12 +853,13 @@ class InpaintService:
                     "protect_pixels_in_crop": int(prot[y0:y1, x0:x1].sum()),
                 },
                 context_pass=context_pass_info,
+                ladder=ladder_info or None,
                 progressive=progressive_info,
             )
 
         stats = InpaintStats(
             engine=self.engine.name,
-            windows=seed_calls + len(calls),
+            windows=seed_calls + ladder_calls + len(calls),
             elapsed_s=time.monotonic() - t0,
         )
         return new_pixels, stats
