@@ -1,5 +1,5 @@
-"""Tests for the quality pipeline: context expansion, multi-scale pass,
-color harmonization, texture transplant, runtime quality.ini overrides."""
+"""Tests for the quality pipeline: crop planning, whole-hole seed, progressive
+native refinement, color harmonization, texture, quality.ini overrides."""
 from __future__ import annotations
 
 import cv2
@@ -44,6 +44,7 @@ def _quality(monkeypatch, **over):
     q = dict(config._QUALITY_DEFAULTS)
     q.update(over)
     monkeypatch.setattr(mod, "quality", lambda: q)
+    return q
 
 
 def test_plan_region_expands_to_full_window():
@@ -75,8 +76,28 @@ def test_context_scale_bounds():
     assert _context_scale(20000, 20000, 512, 0.6, 0.125) == 0.125
 
 
-def test_large_hole_runs_scaled_context_pass(monkeypatch):
-    """A hole larger than the window must trigger a downscaled context pass."""
+def _big_hole_case():
+    pixels = _img(1600, 1600)
+    removal = np.zeros((1600, 1600), np.uint8)
+    removal[400:1300, 400:1300] = 255  # 900x900 hole, far above the trigger
+    return pixels, removal
+
+
+class Recorder(DummyEngine):
+    """Records every window the engine is asked to fill."""
+
+    def __init__(self, input_size=512):
+        super().__init__(input_size)
+        self.masks = []
+
+    def fill(self, tile, mask):
+        self.masks.append(mask.copy())
+        return super().fill(tile, mask)
+
+
+def test_large_hole_seeds_then_refines_natively(monkeypatch):
+    """A hole larger than the trigger is seeded from a downscaled canvas and
+    then refined with native-resolution windows."""
     _quality(monkeypatch, harmonize=0.0, texture=0.0)
     seen = []
     orig = mod._tiled_fill
@@ -86,21 +107,127 @@ def test_large_hole_runs_scaled_context_pass(monkeypatch):
         return orig(engine, region, reg_eff, q, cancel, progress, total, done)
 
     monkeypatch.setattr(mod, "_tiled_fill", spy)
-    engine = DummyEngine()
+    engine = Recorder()
     svc = InpaintService(engine)
-    pixels = _img(1600, 1600)
-    removal = np.zeros((1600, 1600), np.uint8)
-    removal[400:1300, 400:1300] = 255  # 900x900 hole
+    pixels, removal = _big_hole_case()
 
     out, stats = svc.inpaint(pixels, removal, None)
-    assert len(seen) == 2  # native pass + scaled context pass
-    assert max(seen[1]) < max(seen[0])
+    # exactly one seed pass, on the downscaled canvas
+    assert len(seen) == 1
+    assert max(seen[0]) < 512
+    # ... followed by native-resolution refinement windows only
+    assert engine.calls
+    assert all(shape[:2] == (512, 512) for shape, _mask in engine.calls)
     # invariants: only removal pixels change
     changed = np.any(out != pixels, axis=2)
     assert changed[400:1300, 400:1300].all()
     assert not changed[:400].any()
     assert not changed[1300:].any()
-    assert stats.windows > 1
+    # every engine call is counted, the seed window included
+    assert stats.windows == len(engine.calls) > 1
+
+
+def test_no_window_is_asked_to_fill_a_mostly_empty_tile(monkeypatch):
+    """The failure mode of the old single native pass: windows that are almost
+    entirely hole. The progressive stage must never exceed the cap, and the
+    seed must run with real context around the hole, not a padded tile."""
+    q = _quality(monkeypatch, harmonize=0.0, texture=0.0)
+    engine = Recorder()
+    svc = InpaintService(engine)
+    pixels, removal = _big_hole_case()
+    svc.inpaint(pixels, removal, None)
+
+    shares = [float(m.mean()) for m in engine.masks]
+    assert len(shares) > 1  # seed window first, then the progressive stage
+    seed_share, peel_shares = shares[0], shares[1:]
+    assert max(peel_shares) <= q["peel_max_unknown"] + 1e-6
+    assert seed_share < 0.6
+
+
+class MarkerEngine:
+    """Fills every window with its own call number (1/255 per call)."""
+
+    name = "marker"
+    input_size = 512
+
+    def __init__(self):
+        self.n = 0
+
+    def fill(self, tile, mask):
+        self.n += 1
+        return np.full_like(tile, self.n / 255.0)
+
+
+def _marked_run(monkeypatch, **over):
+    """Run the big-hole case and return (call index map, pixels, removal)."""
+    q = _quality(monkeypatch, harmonize=0.0, texture=0.0, **over)
+    svc = InpaintService(MarkerEngine())
+    pixels, removal = _big_hole_case()
+    out, _stats = svc.inpaint(pixels, removal, None)
+    idx = np.rint(out[..., 0].astype(np.float32) / 65535.0 * 255.0).astype(int)
+    return q, idx, pixels, removal
+
+
+def test_first_refinement_windows_stay_near_the_real_boundary(monkeypatch):
+    """The first native windows may only mask pixels within one peel band of
+    real image content — that is what keeps structure continuation possible."""
+    q, idx, _pixels, removal = _marked_run(monkeypatch)
+    hole = removal > 0
+    dist = cv2.distanceTransform(hole.astype(np.uint8), cv2.DIST_L2, 5)
+    band = q["peel_band"] * 512
+    first_round = hole & (idx == 2)  # call 1 is the downscaled seed window
+    assert first_round.any()
+    assert int(dist[first_round].max()) <= band + 1.5
+
+
+def test_large_hole_is_refined_over_several_rounds(monkeypatch):
+    """A hole far deeper than the peel band cannot be closed by one round: the
+    pixels in its middle are only reachable once the front of trusted content
+    has advanced, so they carry a later call number."""
+    _q, idx, _pixels, removal = _marked_run(monkeypatch)
+    hole = removal > 0
+    dist = cv2.distanceTransform(hole.astype(np.uint8), cv2.DIST_L2, 5)
+    core = hole & (dist > 380)  # deeper than the 307 px band
+    assert core.any()
+    assert (idx[core] > 1).all()          # never reachable in the first round
+    assert idx[core].min() > idx[hole].min()
+    # every hole pixel was rewritten by the progressive stage (call 1 is the
+    # seed): no pixel may be left behind because no window claimed it
+    interior = hole & (dist >= 4)  # the 1 px seam feather blends at the rim
+    assert (idx[interior] >= 2).all()
+    assert set(np.unique(idx[hole])) <= set(range(1, 300))
+
+
+def test_removed_content_never_becomes_model_context(monkeypatch):
+    """The object being removed must never be visible to the model: inside the
+    removal region every native window either masks the pixel or finds seed
+    content there, never the original pixels."""
+    _quality(monkeypatch, harmonize=0.0, texture=0.0)
+
+    class FlatEngine:
+        name = "flat"
+        input_size = 512
+
+        def __init__(self):
+            self.tiles = []
+
+        def fill(self, tile, mask):
+            self.tiles.append((tile.copy(), mask.copy()))
+            return np.full_like(tile, 0.25)
+
+    engine = FlatEngine()
+    svc = InpaintService(engine)
+    pixels = np.full((1600, 1600, 3), int(0.2 * 65535), np.uint16)
+    removal = np.zeros((1600, 1600), np.uint8)
+    removal[400:1300, 400:1300] = 255
+    pixels[removal > 0] = 65535  # the "object": pure white
+    svc.inpaint(pixels, removal, None)
+
+    native_tiles = [(t, m) for t, m in engine.tiles if t.shape == (512, 512, 3)]
+    assert native_tiles  # the progressive stage really ran here
+    for tile, mask in native_tiles:
+        leaked = (tile[..., 0] > 0.9) & (mask < 0.5)
+        assert not leaked.any()
 
 
 def test_small_hole_single_window_single_pass():

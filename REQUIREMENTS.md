@@ -78,17 +78,23 @@ holes from surrounding context with an AI inpainting model.
 2. **TIFF EXIF is best-effort.** The chosen TIFF writer preserves ICC natively
    but has no first-class EXIF writer; JPG export preserves EXIF fully. If a
    TIFF EXIF write is not possible, export still succeeds (logged).
-3. **Fixed-shape model tiling.** The LaMa ONNX export is fixed at 512×512, so
-   inference runs in native-resolution 512×512 windows with 128 px overlap and
-   narrow crossfades. Large holes also receive a downscaled context pass for
-   structure, combined with detail from the native pass. Boundary color matching
-   and scene-matched grain help the fill blend into its surroundings.
+3. **Fixed-shape model tiling with progressive refinement.** The LaMa ONNX
+   export is fixed at 512×512, so a hole larger than one conditioned window is
+   first *seeded* in one shot at a downscaled canvas (plausible content, no
+   detail), then refined at native resolution band by band: each call masks
+   only what lies within one peel band of real or already-filled content and at
+   most a fixed share of its window, so a window is never asked to invent a
+   mostly-empty tile (the earlier single native pass degraded to tile-sized
+   mosaics on large holes). Every pixel is written once, frontier windows see
+   earlier fills as context, and structure is extended from the surroundings
+   inward. Boundary color matching and scene-matched grain help the fill blend
+   into its surroundings.
 4. **Checksum is trust-on-first-use.** The model hash recorded after the first
    successful download is verified on every later load; a pinned hash in
    `config.MODEL_SHA256` is enforced when set.
 5. **Runtime quality tuning.** Optional `quality.ini` in `config.app_data_dir()`
    (`%LOCALAPPDATA%\ObjectRemover\quality.ini` on Windows) overrides quality
    defaults with numeric `key=value` lines, e.g. `harmonize=1.0`, `texture=0.4`,
-   or `freq_sigma=8.0`. It is re-read on every removal pass; no restart is needed.
+   or `peel_band=0.5`. It is re-read on every removal pass; no restart is needed.
    A missing file uses defaults; unknown keys and non-numeric values are ignored.
    See `config.py` for the supported settings and defaults.

@@ -91,10 +91,9 @@ def test_enabled_writes_expected_files_and_metadata(app_dir, plain_quality):
         "00-original.png",
         "mask.png",
         "01-native.png",
-        "03-combined-before-corrections.png",
         "04-final.png",
         "metadata.json",
-    ])  # small hole: no 02-context.png (context pass did not run)
+    ])  # small hole: no 02-context.png (no whole-hole seed was needed)
 
     meta = json.loads((runs[0] / "metadata.json").read_text(encoding="utf-8"))
     assert meta["engine"] == {"name": "dummy", "input_size": 512}
@@ -108,6 +107,13 @@ def test_enabled_writes_expected_files_and_metadata(app_dir, plain_quality):
         "removal_pixels_in_crop": 40 * 40,
         "protect_pixels_in_crop": 0,
     }
+    # the progressive stage records what it actually did, window by window
+    prog = meta["progressive_fill"]
+    assert prog["calls"] == 1
+    assert prog["forced_calls"] == 0
+    assert prog["max_hole_share_used"] <= prog["max_window_hole_share"]
+    assert len(prog["call_log"]) == 1
+    assert prog["call_log"][0]["pixels"] == 40 * 40
     assert sorted(meta["images_written"]) == sorted(names[:-1])
     assert "8-bit" in meta["png_note"]
 
@@ -136,7 +142,7 @@ def test_enabled_writes_expected_files_and_metadata(app_dir, plain_quality):
     assert second[0].name != second[1].name
 
 
-def test_context_pass_captured_when_it_runs(app_dir):
+def test_whole_hole_seed_captured_when_it_runs(app_dir):
     _enable(app_dir)
     # 900x900 hole in a 1600x1600 image: larger than the window trigger
     _run_removal(1600, 1600, (400, 1300, 400, 1300))
@@ -148,16 +154,23 @@ def test_context_pass_captured_when_it_runs(app_dir):
     assert meta["quality"] == config._QUALITY_DEFAULTS
     cp = meta["context_pass"]
     assert cp["ran"] is True
+    assert cp["seeder"] == "ai-whole-hole"
     assert 0.0 < cp["downscale"] < 1.0
     crop = meta["crop"]
     assert cp["scaled_size"]["width"] < crop["x1"] - crop["x0"]
     assert cp["scaled_size"]["height"] < crop["y1"] - crop["y0"]
+    # the seed writes plausible content everywhere, then native windows refine
+    prog = meta["progressive_fill"]
+    assert prog["calls"] > 1
+    assert prog["band_px"] == 307  # peel_band * 512
+    assert all(
+        c["window_hole_share"] <= prog["max_window_hole_share"] for c in prog["call_log"]
+    )
     assert sorted(meta["images_written"]) == sorted([
         "00-original.png",
         "mask.png",
         "01-native.png",
         "02-context.png",
-        "03-combined-before-corrections.png",
         "04-final.png",
     ])
 

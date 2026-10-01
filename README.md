@@ -64,8 +64,13 @@ iscc packaging\installer.iss
 
 ## Notes
 
-- Inference runs in native-resolution 512×512 windows (LaMa ONNX fixed input),
-  with 128 px overlap and feathered blending — no detail loss on huge images.
+- Inference always runs at native resolution (LaMa ONNX fixed 512×512 input),
+  in two stages: a *whole-hole seed* fills big selections in one shot at a
+  downscaled canvas (plausible content, no structure), then the removal area
+  is **progressively refined** — band by band, from the real boundary inward,
+  so every 512×512 window has real or already-refined content around the area
+  it completes. No window is ever asked to invent a mostly-empty tile, and no
+  detail is lost on huge images.
 - Protected pixels are never overwritten and never used as fill source.
 - Export never modifies the source image.
 
@@ -76,10 +81,14 @@ create an empty file named `diagnostics.enabled` in
 `%LOCALAPPDATA%\ObjectRemover` (the same app-data folder as `quality.ini`).
 While that marker exists, every removal writes a uniquely named folder under
 `%LOCALAPPDATA%\ObjectRemover\diagnostics\` containing `00-original.png`
-(cropped region), `mask.png` (effective removal mask), `01-native.png`,
-`02-context.png` (only when the context pass ran),
-`03-combined-before-corrections.png`, `04-final.png`, and `metadata.json`
-(engine, quality settings, crop coordinates, context-pass info).
+(cropped region), `mask.png` (effective removal mask), `01-native.png` (the
+native-resolution reconstruction before color/texture corrections),
+`02-context.png` (only when the whole-hole seed ran) and `04-final.png`
+(the composited result). `metadata.json` records the engine, the effective
+quality settings, the crop coordinates, the seed pass, and — for the
+progressive refinement — the window size, the masked-share cap, and a log of
+every window that was filled (`call_log`: window position, pixels written,
+share of the window that was masked, share that was still seed content).
 
 Everything is written locally — no upload or network activity. The
 diagnostic images are 8-bit PNGs and **may not preserve the
